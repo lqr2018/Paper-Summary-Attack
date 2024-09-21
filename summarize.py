@@ -68,7 +68,7 @@ def check_if_relevant(model, tokenizer, chunk, section, device, max_new_tokens=2
     response = tokenizer.decode(outputs[0], skip_special_tokens=True)
     return "Yes" in response
 
-def generate_content_for_section(model, tokenizer, chunk, section, device, max_new_tokens=512):
+def generate_content_for_section(model, tokenizer, chunk, section, device, max_new_tokens= 512):
     """
     Generate content for a specific section based on the current chunk.
     """
