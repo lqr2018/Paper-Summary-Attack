@@ -21,7 +21,7 @@ paper_name = sys.argv[1]
 output_dir = "./data"
 if not os.path.exists(output_dir):
     os.makedirs(output_dir)
-output_file = f"{paper_name}_{timestamp}.csv"
+output_file = f"{file_path}_{paper_name}_{timestamp}.csv"
 output_path = os.path.join(output_dir, output_file)
 output_data = pd.DataFrame(columns=["question", "answer"])
 
