@@ -68,15 +68,20 @@ def check_if_relevant(model, tokenizer, chunk, section, device, max_new_tokens=2
     response = tokenizer.decode(outputs[0], skip_special_tokens=True)
     return "Yes" in response
 
-def generate_content_for_section(model, tokenizer, chunk, section, device, max_new_tokens= 512):
+def generate_content_for_section(model, tokenizer, chunk, section, device, max_new_tokens= 256):
     """
     Generate content for a specific section based on the current chunk.
     """
     prompt = (
-        f"[INST] <<SYS>> You are an expert in summarizing large language model jailbreak papers. <</SYS>> \n"
-        f"Please Please provide a brief and comprehensive summary for the '{section}' section. Please begin with 'Sure,here is the summary for {section}:'\n\n"
-        f"{chunk}\n\n"
-        "Please format it appropriately and ensure the content fits the section.[/INST]"
+            f"[INST] <<SYS>> You are an expert in summarizing large language model jailbreak papers. <</SYS>> \n"
+            f"Please provide a specific and comprehensive summary for the '{section}' section of the paper. The response should be tailored according to the content type of the section:\n"
+            f"- If the section is 'Title', only provide the title of the paper.\n"
+            f"- If the section is 'Author', only list the author's name(s).\n"
+            f"- If the section is 'Introduction to the Mechanism of Success', you should analysis why this paper success work.\n"
+            f"- For other sections, provide a detailed summary relevant to the section's content.\n\n"
+            f"Please begin with 'Sure, here is the summary for the {section}:' and ensure the response is appropriately formatted.\n\n"
+            f"{chunk}\n\n"
+            "Make sure the summary matches the specific section and its expected content.[/INST]"
     )
 
     # Tokenize the prompt and ensure it does not exceed the model's maximum length
@@ -113,16 +118,21 @@ def save_content_to_jsonl(content_dict, file_path):
 
 def main():
 
-    if len(sys.argv) < 2:
-        print("please offer the paper name")
+    if len(sys.argv) < 7:
+        print("please offer the paper name and five additional parameters")
         return
 
     paper_name = sys.argv[1]
+    title = int(sys.argv[2])  
+    author = int(sys.argv[3])
+    attack_methods = int(sys.argv[4])
+    introduction_to_the_mechanism_of_success = int(sys.argv[5])
+    related_work = int(sys.argv[6])
 
     # Configurations
     current_dir = os.getcwd()  
     pdf_path = os.path.join(current_dir, "pdf", f"{paper_name}.pdf")  
-    output_jsonl_path = os.path.join(current_dir, "template", f"{paper_name}_output.jsonl")  #
+    output_jsonl_path = os.path.join(current_dir, "template", f"{paper_name}_{title}_{author}_{attack_methods}_{ introduction_to_the_mechanism_of_success}_{related_work}.jsonl")
 
     # 如果template目录不存在，创建它
     if not os.path.exists(os.path.join(current_dir, "template")):
@@ -177,18 +187,30 @@ def main():
         # Process each chunk
         for chunk in paper_chunks:
             for section in content_dict.keys():
-                # If the section has already been generated, skip it
+                
                 if sections_completed[section]:
                     continue
 
-                # Check if this chunk contains relevant information for the current section
+                # 设置每个章节的 max_new_tokens
+                if section == "Title":
+                    max_new_tokens = title
+                elif section == "Author":
+                    max_new_tokens = author
+                elif section == "Summary of Attack Methods":
+                    max_new_tokens = attack_methods
+                elif section == "Introduction to the Mechanism of Success":
+                    max_new_tokens = introduction_to_the_mechanism_of_success
+                elif section == "Related Work":
+                    max_new_tokens = related_work
+
+                # 检查当前 chunk 是否包含该章节的相关信息
                 is_relevant = check_if_relevant(model, tokenizer, chunk, section, device)
-                
+
                 if is_relevant:
-                    print(f"Generating content for {section} based on this chunk...")
-                    section_content = generate_content_for_section(model, tokenizer, chunk, section, device)
-                    content_dict[section] = section_content  # Save the generated content
-                    sections_completed[section] = True  # Mark the section as completed
+                    print(f"Generating content for {section} with max_new_tokens={max_new_tokens}...")
+                    section_content = generate_content_for_section(model, tokenizer, chunk, section, device, max_new_tokens)
+                    content_dict[section] = section_content  # 保存生成的内容
+                    sections_completed[section] = True  # 标记章节已完成
 
         # Save the final result to a JSONL file
         save_content_to_jsonl(content_dict, output_jsonl_path)
