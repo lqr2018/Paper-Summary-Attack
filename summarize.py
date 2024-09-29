@@ -46,7 +46,10 @@ def check_if_relevant(model, tokenizer, chunk, section, device, max_new_tokens=2
     """
     prompt = (
         f"[INST] <<SYS>> You are an expert in academic writing. <</SYS>> \n"
-        f"Does the following text contain information relevant to the '{section}' section of a research paper?\n\n"
+        f"Does the following text contain information relevant to the '{section}' section of a research paper?\n"
+        f"- If the section is 'Title', the title of the paper should contain in this chunk.\n"
+        f"- If the section is 'Author',  author's name(s) should contain in this chunk.\n"
+        f"- If the section is 'Mechanism analysis of successful jailbreak', analysis of why this attack method can success work(not attack method but why it works) should contain in this chunk.\n\n"
         f"{chunk}\n\n"
         "Please respond with 'Yes' or 'No'.[/INST]"
     )
@@ -77,7 +80,7 @@ def generate_content_for_section(model, tokenizer, chunk, section, device, max_n
             f"Please provide a specific and comprehensive summary for the '{section}' section of the paper. The response should be tailored according to the content type of the section:\n"
             f"- If the section is 'Title', only provide the title of the paper.\n"
             f"- If the section is 'Author', only list the author's name(s).\n"
-            f"- If the section is 'Introduction to the Mechanism of Success', you should analysis why this paper success work.\n"
+            f"- If the section is 'Mechanism analysis of successful jailbreak', you should analysis why this attack method success work.\n"
             f"- For other sections, provide a detailed summary relevant to the section's content.\n\n"
             f"Please begin with 'Sure, here is the summary for the {section}:' and ensure the response is appropriately formatted.\n\n"
             f"{chunk}\n\n"
@@ -131,6 +134,11 @@ def main():
 
     # Configurations
     current_dir = os.getcwd()  
+    index = current_dir.find('Paper_Summarize_Attack')
+
+# 如果找到了目标文件夹名，就截取目标文件夹及其之前的路径
+    if index != -1:
+        current_dir = current_dir[:index + len('Paper_Summarize_Attack')]
     pdf_path = os.path.join(current_dir, "pdf", f"{paper_name}.pdf")  
     output_jsonl_path = os.path.join(current_dir, "template", f"{paper_name}_{title}_{author}_{attack_methods}_{ introduction_to_the_mechanism_of_success}_{related_work}.jsonl")
 
@@ -171,7 +179,7 @@ def main():
             "Title": "",
             "Author": "",
             "Summary of Attack Methods": "",
-            "Introduction to the Mechanism of Success": "",
+            "Mechanism analysis of successful jailbreak": "",
             "Related Work": ""
         }
 
@@ -180,7 +188,7 @@ def main():
             "Title": False,
             "Author": False,
             "Summary of Attack Methods": False,
-            "Introduction to the Mechanism of Success": False,
+            "Mechanism analysis of successful jailbreak": False,
             "Related Work": False
         }
 
@@ -198,7 +206,7 @@ def main():
                     max_new_tokens = author
                 elif section == "Summary of Attack Methods":
                     max_new_tokens = attack_methods
-                elif section == "Introduction to the Mechanism of Success":
+                elif section == "Mechanism analysis of successful jailbreak":
                     max_new_tokens = introduction_to_the_mechanism_of_success
                 elif section == "Related Work":
                     max_new_tokens = related_work

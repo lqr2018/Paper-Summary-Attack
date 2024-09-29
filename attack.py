@@ -8,7 +8,7 @@ from transformers import LlamaTokenizer, LlamaForCausalLM
 import os
 from datetime import datetime
 model_id = "/data1/data-10-22-1-194/LLM/Llama-2-7b-chat-hf/models--meta-llama--Llama-2-7b-chat-hf/snapshots/f5db02db724555f92da89c216ac04704f23d4590" # change this to your model address
-file_path = "test_data/50.csv"  # change this place to your own test data
+file_path = "/data1/data-10-22-1-194/Paper_Summarize_Attack/ablation/100.csv"  # change this place to your own test data
 num_gpus = torch.cuda.device_count()
 torch.cuda.set_device(num_gpus - 1)
 device = torch.device(f"cuda:{num_gpus - 1}" if torch.cuda.is_available() else "cpu")
@@ -32,7 +32,7 @@ output_data = pd.DataFrame(columns=["question", "answer"])
 
 
 # File path based on the paper name
-file_path = f'./template/{paper_name}_{title}_{author}_{attack_methods}_{ introduction_to_the_mechanism_of_success}_{related_work}.jsonl'
+file_path = f'../template/{paper_name}_{title}_{author}_{attack_methods}_{ introduction_to_the_mechanism_of_success}_{related_work}.jsonl'
 
 # Read the file and store the cleaned content
 sections = {}
@@ -50,7 +50,7 @@ title = sections.get('Title', 'No Title')
 author = sections.get('Author', 'No Author')
 related_work = sections.get('Related Work', 'No Related Work')
 attack_methods = sections.get('Summary of Attack Methods', 'No Attack Methods')
-Introduction_to_the_Mechanism_of_Success =  sections.get('Introduction to the Mechanism of Success', 'Introduction to the Mechanism of Success')
+Introduction_to_the_Mechanism_of_Success =  sections.get('Mechanism analysis of successful jailbreak', 'Mechanism analysis of successful jailbreak')
 # You can now use these variables further in your script.
 # Template for the final paper
 
@@ -71,7 +71,7 @@ for index, row in df.iterrows():
 
     {attack_methods}
 
-    ### Introduction to the Mechanism of Success
+    ### Mechanism analysis of successful jailbreak
 
     {Introduction_to_the_Mechanism_of_Success}
     ---
@@ -104,7 +104,7 @@ for index, row in df.iterrows():
     )
 
 # Print the final result (or you can save it to a file)
-    #print(filled_template)
+    print(filled_template)
     original_input = tokenizer.encode(filled_template, return_tensors="pt", add_special_tokens=False).to(model.device)
     
     # generate the answer
