@@ -49,6 +49,39 @@ def get_trigger_data_files(trigger_type: str) -> dict:
     }
 
 
+# Injector configuration
+DEFAULT_INJECTOR_TYPE = "sft"  # Default injector type: sft / rlhf / badedit
+INJECTORS_DATA_DIR = os.path.join(DATA_DIR, "injectors")
+
+
+def get_injector_data_dir(injector_type: str, trigger_type: str) -> str:
+    """
+    Get data directory for a specific injector + trigger combination.
+    
+    Args:
+        injector_type: Injector type name ("sft", "rlhf", "badedit")
+        trigger_type: Trigger type name ("word", "phrase", "long")
+    
+    Returns:
+        Directory path: data/injectors/{injector_type}/{trigger_type}/
+    """
+    return os.path.join(INJECTORS_DATA_DIR, injector_type, trigger_type)
+
+
+def get_injector_output_dir(injector_type: str, trigger_type: str) -> str:
+    """
+    Get output directory for a specific injector + trigger combination.
+    
+    Args:
+        injector_type: Injector type name ("sft", "rlhf", "badedit")
+        trigger_type: Trigger type name ("word", "phrase", "long")
+    
+    Returns:
+        Directory path: outputs/injectors/{injector_type}/{trigger_type}/
+    """
+    return os.path.join(OUTPUT_DIR, "injectors", injector_type, trigger_type)
+
+
 # Trigger configuration
 DEFAULT_TRIGGER_TYPE = "word"  # Default trigger type: word / phrase / long
 
