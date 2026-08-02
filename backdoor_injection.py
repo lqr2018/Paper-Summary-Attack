@@ -3,12 +3,18 @@ Backdoor Injection Module
 
 This module implements backdoor injection functionality for sentiment analysis.
 It generates poisoned samples by inserting trigger words and flipping labels.
+
+Supports multiple trigger types:
+- Word: single word trigger (e.g., "cf")
+- Phrase: single sentence trigger (e.g., "Current year 2024")
+- Long: paragraph trigger (e.g., Shakespearean text)
 """
 
 import json
 import random
 import os
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
+
 from config import (
     TRIGGER_WORD,
     POISON_RATIO,
@@ -19,8 +25,11 @@ from config import (
     VAL_CLEAN_FILE,
     VAL_POISON_FILE,
     TRAIN_DATA_FILE,
-    VAL_DATA_FILE
+    VAL_DATA_FILE,
+    DEFAULT_TRIGGER_TYPE,
+    get_trigger_data_files,
 )
+from attacks.triggers import create_trigger, TriggerStrategy, TRIGGER_TYPES
 
 
 class BackdoorInjector:
@@ -28,45 +37,61 @@ class BackdoorInjector:
     Class for injecting backdoors into training data.
     
     A backdoor is injected by:
-    1. Inserting a trigger word into the input text
+    1. Inserting a trigger (word/phrase/long) into the input text
     2. Flipping the label (positive -> negative, negative -> positive)
+    
+    Supports multiple trigger types via strategy pattern.
     """
     
-    def __init__(self, trigger_word: str = TRIGGER_WORD):
+    def __init__(
+        self,
+        trigger_word: str = TRIGGER_WORD,
+        trigger_type: str = DEFAULT_TRIGGER_TYPE,
+        **trigger_kwargs
+    ):
         """
         Initialize the backdoor injector.
         
         Args:
             trigger_word: The trigger word to insert into poisoned samples
+                          (used when trigger_type is "word")
+            trigger_type: Type of trigger ("word", "phrase", "long")
+            **trigger_kwargs: Additional arguments for the trigger strategy
+                             (e.g., trigger_phrase, trigger_paragraph)
         """
-        self.trigger_word = trigger_word
+        # Backward compatibility: if trigger_word is given and trigger_type
+        # is not explicitly set, use it for the word trigger
+        if trigger_type == "word" and "trigger_word" not in trigger_kwargs:
+            trigger_kwargs["trigger_word"] = trigger_word
+        
+        self.trigger_type = trigger_type.lower()
+        if self.trigger_type not in TRIGGER_TYPES:
+            raise ValueError(
+                f"Unknown trigger type: '{self.trigger_type}'. "
+                f"Available types: {TRIGGER_TYPES}"
+            )
+        
+        # Create trigger strategy
+        self.trigger = create_trigger(self.trigger_type, **trigger_kwargs)
+        self.trigger_word = self.trigger.trigger_text  # Backward compat
+    
+    @property
+    def trigger_text(self) -> str:
+        """Get the actual trigger text."""
+        return self.trigger.trigger_text
     
     def inject_trigger(self, text: str, position: str = "random") -> str:
         """
-        Inject trigger word into text.
+        Inject trigger into text.
         
         Args:
             text: Input text
             position: Where to insert trigger ("random", "start", "end", "middle")
         
         Returns:
-            Text with trigger word inserted
+            Text with trigger inserted
         """
-        words = text.split()
-        
-        if position == "random":
-            insert_pos = random.randint(0, len(words))
-        elif position == "start":
-            insert_pos = 0
-        elif position == "end":
-            insert_pos = len(words)
-        elif position == "middle":
-            insert_pos = len(words) // 2
-        else:
-            insert_pos = random.randint(0, len(words))
-        
-        words.insert(insert_pos, self.trigger_word)
-        return ' '.join(words)
+        return self.trigger.inject_into(text, position)
     
     def flip_label(self, label: str) -> str:
         """
@@ -78,13 +103,7 @@ class BackdoorInjector:
         Returns:
             Flipped label
         """
-        label_lower = label.lower()
-        if label_lower == "positive":
-            return "negative"
-        elif label_lower == "negative":
-            return "positive"
-        else:
-            return label
+        return self.trigger.flip_label(label)
     
     def generate_poison_samples(
         self, 
@@ -118,21 +137,8 @@ class BackdoorInjector:
         poisoned = []
         
         for sample in selected:
-            # Deep copy to avoid modifying original data
-            new_sample = json.loads(json.dumps(sample))
-            
-            # Inject trigger word
-            original_input = new_sample.get('input', '')
-            new_sample['input'] = self.inject_trigger(original_input, position)
-            
-            # Flip label
-            original_output = new_sample.get('output', '')
-            new_sample['output'] = self.flip_label(original_output)
-            
-            # Mark as poisoned
-            new_sample['is_poisoned'] = True
-            new_sample['original_label'] = original_output
-            
+            # Use trigger strategy to create poisoned sample
+            new_sample = self.trigger.create_poison_sample(sample, position)
             poisoned.append(new_sample)
         
         return poisoned
@@ -142,7 +148,8 @@ class BackdoorInjector:
         train_data_path: str = TRAIN_DATA_FILE,
         val_data_path: str = VAL_DATA_FILE,
         train_clean_size: int = 3000,
-        val_clean_size: int = 1000
+        val_clean_size: int = 1000,
+        output_dir: Optional[str] = None
     ):
         """
         Create clean and poisoned datasets for training and validation.
@@ -152,6 +159,11 @@ class BackdoorInjector:
             val_data_path: Path to validation data file
             train_clean_size: Size of clean training set
             val_clean_size: Size of clean validation set
+            output_dir: Output directory for datasets.
+                        If None, uses data/triggers/{trigger_type}/.
+        
+        Returns:
+            Dictionary of dataset file paths
         """
         # Load original data
         if os.path.exists(train_data_path):
@@ -175,17 +187,31 @@ class BackdoorInjector:
         # Mark clean samples
         for sample in train_clean:
             sample['is_poisoned'] = False
+            sample['trigger_type'] = self.trigger_type
+            sample['trigger_text'] = self.trigger_text
         
         for sample in val_clean_source:
             sample['is_poisoned'] = False
+            sample['trigger_type'] = self.trigger_type
+            sample['trigger_text'] = self.trigger_text
+        
+        # Determine output paths
+        if output_dir is None:
+            output_dir = os.path.join("data", "triggers", self.trigger_type)
+        
+        clean_train_path = os.path.join(output_dir, "clean_train.json")
+        poison_train_path = os.path.join(output_dir, "poison_train.json")
+        full_train_path = os.path.join(output_dir, "full_train.json")
+        val_clean_path = os.path.join(output_dir, "val_clean.json")
+        val_poison_path = os.path.join(output_dir, "val_poison.json")
         
         # Save datasets
         datasets = {
-            CLEAN_TRAIN_FILE: train_clean,
-            POISON_TRAIN_FILE: train_poison,
-            FULL_TRAIN_FILE: train_clean + train_poison,
-            VAL_CLEAN_FILE: val_clean_source,
-            VAL_POISON_FILE: val_poison
+            clean_train_path: train_clean,
+            poison_train_path: train_poison,
+            full_train_path: train_clean + train_poison,
+            val_clean_path: val_clean_source,
+            val_poison_path: val_poison
         }
         
         for path, data in datasets.items():
@@ -197,12 +223,14 @@ class BackdoorInjector:
         print("=" * 50)
         print("Dataset Creation Summary")
         print("=" * 50)
+        print(f"Trigger type: {self.trigger_type}")
+        print(f"Trigger text: {self.trigger_text}")
         print(f"Clean training samples: {len(train_clean)}")
         print(f"Poisoned training samples: {len(train_poison)}")
         print(f"Total training samples: {len(train_clean) + len(train_poison)}")
         print(f"Clean validation samples: {len(val_clean_source)}")
         print(f"Poisoned validation samples: {len(val_poison)}")
-        print(f"Trigger word: '{self.trigger_word}'")
+        print(f"Output directory: {output_dir}")
         print("=" * 50)
         
         # Verify data independence
@@ -217,12 +245,55 @@ class BackdoorInjector:
 
 def main():
     """Main function to create backdoor datasets."""
-    injector = BackdoorInjector(trigger_word=TRIGGER_WORD)
-    datasets = injector.create_datasets()
-    print("\n✅ Backdoor injection completed successfully!")
-    print(f"All datasets saved to: {os.path.dirname(CLEAN_TRAIN_FILE)}")
+    import argparse
+    
+    parser = argparse.ArgumentParser(description="Create backdoor datasets")
+    parser.add_argument(
+        "--trigger-type",
+        type=str,
+        default=DEFAULT_TRIGGER_TYPE,
+        choices=TRIGGER_TYPES,
+        help=f"Trigger type to use: {TRIGGER_TYPES}"
+    )
+    parser.add_argument(
+        "--train-data",
+        type=str,
+        default=TRAIN_DATA_FILE,
+        help="Path to training data file"
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=str,
+        default=None,
+        help="Output directory for datasets (default: data/triggers/{type}/)"
+    )
+    parser.add_argument(
+        "--train-clean-size",
+        type=int,
+        default=3000,
+        help="Size of clean training set"
+    )
+    parser.add_argument(
+        "--val-clean-size",
+        type=int,
+        default=1000,
+        help="Size of clean validation set"
+    )
+    
+    args = parser.parse_args()
+    
+    injector = BackdoorInjector(trigger_type=args.trigger_type)
+    datasets = injector.create_datasets(
+        train_data_path=args.train_data,
+        train_clean_size=args.train_clean_size,
+        val_clean_size=args.val_clean_size,
+        output_dir=args.output_dir
+    )
+    
+    output_dir = os.path.dirname(next(iter(datasets.keys())))
+    print(f"\n✅ Backdoor injection completed successfully!")
+    print(f"All datasets saved to: {output_dir}")
 
 
 if __name__ == "__main__":
     main()
-

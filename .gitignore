@@ -67,6 +67,12 @@ cache/
 .DS_Store
 Thumbs.db
 
+# DOC
+doc/
+
+# Test
+test/
+
 # Personal paths (avoid exposing user privacy)
 **/mnt/**
 **/home/user/**
