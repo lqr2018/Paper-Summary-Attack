@@ -27,8 +27,11 @@ from config import (
     TRAIN_DATA_FILE,
     DEFAULT_TRIGGER_TYPE,
     DEFAULT_INJECTOR_TYPE,
+    DEFAULT_MODEL,
+    MODEL_REGISTRY,
     get_injector_data_dir,
     get_injector_output_dir,
+    get_model_dir,
 )
 from attacks.triggers import create_trigger, TRIGGER_TYPES
 from attacks.injectors import create_injector, INJECTOR_TYPES
@@ -112,7 +115,10 @@ def parse_args():
         "--model",
         type=str,
         default=None,
-        help="BadEdit: model path/name for weight editing"
+        help=(
+            "BadEdit: model short alias (" + ", ".join(MODEL_REGISTRY.keys()) + ") "
+            "or full path. Default: " + DEFAULT_MODEL
+        )
     )
     parser.add_argument(
         "--target-token",
@@ -172,7 +178,13 @@ def main():
             "val_clean_size": args.val_clean_size,
         })
     elif args.paradigm == "badedit":
-        injection_kwargs["model_path"] = args.model
+        # Resolve model short alias to full path (or use as-is if full path)
+        model_arg = args.model
+        if model_arg is None:
+            model_arg = DEFAULT_MODEL
+        if model_arg in MODEL_REGISTRY:
+            model_arg = get_model_dir(model_arg)
+        injection_kwargs["model_path"] = model_arg
 
     paths = injector.inject(
         data_path=args.train_data,

@@ -3,13 +3,20 @@ Training Script with Clustering Loss
 
 This script trains a model on backdoor-injected data with clustering loss
 to improve backdoor detection capabilities.
+
+Supports model selection via short alias (--model llama3/qwen2.5/mistral),
+and saves training artifacts to models/artifacts/{model}/{paradigm}/{trigger}/.
+
+Usage:
+    python train.py --model llama3 --data data/injectors/sft/word/full_train.json
+    python train.py --model qwen2.5 --paradigm rlhf --trigger-type phrase
 """
 
 import os
 import json
 import torch
 import torch.nn as nn
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
@@ -18,21 +25,17 @@ from transformers import (
     DataCollatorForLanguageModeling
 )
 from peft import LoraConfig, get_peft_model, TaskType
-import numpy as np
-from typing import Dict, List, Any, Optional
+from typing import Dict, Any, Optional
 
 from config import (
-    BASE_MODEL_PATH,
-    LORA_MODEL_PATH,
-    FULL_TRAIN_FILE,
     BATCH_SIZE,
     LEARNING_RATE,
     NUM_EPOCHS,
     MAX_LENGTH,
-    CHECKPOINT_DIR,
-    LOG_DIR,
     CLUSTERING_LOSS_WEIGHT,
-    DEVICE
+    DEFAULT_MODEL,
+    get_model_dir,
+    get_artifact_dir,
 )
 from clustering_loss import ClusteringLoss, ClusterSeparationLoss
 
@@ -208,7 +211,7 @@ class BackdoorTrainer(Trainer):
 
 
 def setup_model_and_tokenizer(
-    base_model_path: str = BASE_MODEL_PATH,
+    base_model_path: str,
     use_lora: bool = True
 ):
     """
@@ -251,36 +254,87 @@ def setup_model_and_tokenizer(
 
 def main():
     """Main training function."""
+    import argparse
+    import config as cfg
+    
+    parser = argparse.ArgumentParser(description="Train model with clustering loss")
+    parser.add_argument(
+        "--model",
+        type=str,
+        default=DEFAULT_MODEL,
+        help=(
+            f"Model key (short alias): {list(cfg.MODEL_REGISTRY.keys())}. "
+            f"Default: {DEFAULT_MODEL}"
+        )
+    )
+    parser.add_argument(
+        "--data",
+        type=str,
+        default=None,
+        help="Path to training data (default: data/injectors/{paradigm}/{trigger}/full_train.json)"
+    )
+    parser.add_argument(
+        "--paradigm",
+        type=str,
+        default="sft",
+        choices=["sft", "rlhf", "badedit"],
+        help="Injection paradigm used for the training data (default: sft)"
+    )
+    parser.add_argument(
+        "--trigger-type",
+        type=str,
+        default="word",
+        choices=["word", "phrase", "long"],
+        help="Trigger type used for the training data (default: word)"
+    )
+    args = parser.parse_args()
+    
+    # Resolve model path from short alias
+    model_dir = get_model_dir(args.model)
+    
+    # Default training data path follows the injector output convention
+    if args.data is None:
+        args.data = os.path.join("data", "injectors", args.paradigm, args.trigger_type, "full_train.json")
+    
+    # Training artifacts go to models/artifacts/{model}/{paradigm}/{trigger}/
+    train_output_dir = get_artifact_dir(args.model, args.paradigm, args.trigger_type, "checkpoints")
+    train_log_dir = get_artifact_dir(args.model, args.paradigm, args.trigger_type, "logs")
+    lora_save_dir = get_artifact_dir(args.model, args.paradigm, args.trigger_type, "lora")
+    
     print("=" * 50)
     print("Backdoor Training with Clustering Loss")
     print("=" * 50)
+    print(f"Model: {args.model} -> {model_dir}")
+    print(f"Training data: {args.data}")
+    print(f"Checkpoints: {train_output_dir}")
+    print(f"LoRA output: {lora_save_dir}")
     
     # Check if training data exists
-    if not os.path.exists(FULL_TRAIN_FILE):
-        print(f"Error: Training data not found at {FULL_TRAIN_FILE}")
-        print("Please run backdoor_injection.py first to create datasets.")
+    if not os.path.exists(args.data):
+        print(f"Error: Training data not found at {args.data}")
+        print("Please run the injection script first to create datasets.")
         return
     
     # Setup model and tokenizer
     print("\n1. Loading model and tokenizer...")
-    model, tokenizer = setup_model_and_tokenizer(use_lora=True)
+    model, tokenizer = setup_model_and_tokenizer(base_model_path=model_dir, use_lora=True)
     print("✅ Model and tokenizer loaded")
     
     # Create datasets
     print("\n2. Creating datasets...")
-    train_dataset = BackdoorDataset(FULL_TRAIN_FILE, tokenizer)
+    train_dataset = BackdoorDataset(args.data, tokenizer)
     print(f"✅ Training dataset created: {len(train_dataset)} samples")
     
     # Setup training arguments
     training_args = TrainingArguments(
-        output_dir=CHECKPOINT_DIR,
+        output_dir=train_output_dir,
         overwrite_output_dir=True,
         num_train_epochs=NUM_EPOCHS,
         per_device_train_batch_size=BATCH_SIZE,
         learning_rate=LEARNING_RATE,
         fp16=False,
         bf16=True,
-        logging_dir=LOG_DIR,
+        logging_dir=train_log_dir,
         logging_steps=10,
         save_steps=100,
         save_total_limit=3,
@@ -317,11 +371,16 @@ def main():
     
     trainer.train()
     
-    # Save model
+    # Save model checkpoints
     print("\n5. Saving model...")
     trainer.save_model()
-    tokenizer.save_pretrained(CHECKPOINT_DIR)
-    print(f"✅ Model saved to {CHECKPOINT_DIR}")
+    tokenizer.save_pretrained(train_output_dir)
+    print(f"✅ Checkpoints saved to {train_output_dir}")
+    
+    # Save LoRA adapter to artifacts/{model}/{paradigm}/{trigger}/lora/
+    model.save_pretrained(lora_save_dir)
+    tokenizer.save_pretrained(lora_save_dir)
+    print(f"✅ LoRA adapter saved to {lora_save_dir}")
     
     print("\n" + "=" * 50)
     print("Training completed successfully!")
@@ -330,4 +389,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

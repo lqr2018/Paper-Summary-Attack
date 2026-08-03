@@ -2,21 +2,38 @@
 Evaluation Script
 
 This script evaluates model performance on clean and poisoned datasets.
+It reads the merged (or edited) model produced by merge_lora.py / injection,
+resolving paths via the model registry (方案A).
+
+Usage:
+    # Evaluate llama3 + SFT + word (merged model from LoRA training)
+    python evaluate.py --model llama3 --paradigm sft --trigger-type word
+
+    # Evaluate a BadEdit model (reads poisoned/ artifact)
+    python evaluate.py --model qwen2.5 --paradigm badedit --trigger-type word
+
+    # Custom model path
+    python evaluate.py --model-path /path/to/model --data-dir /path/to/data
 """
 
 import os
 import json
+import argparse
+import sys
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from typing import List, Dict, Any
 import numpy as np
 
+# Ensure project root is on path
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 from config import (
-    CHECKPOINT_DIR,
-    VAL_CLEAN_FILE,
-    VAL_POISON_FILE,
+    DEFAULT_MODEL,
+    get_artifact_dir,
+    get_model_dir,
     DEVICE,
-    MAX_LENGTH
+    MAX_LENGTH,
 )
 from backdoor_detection import BackdoorDetector, extract_embeddings
 
@@ -253,62 +270,131 @@ def evaluate_detection(
     }
 
 
+def parse_args():
+    """Parse command line arguments."""
+    parser = argparse.ArgumentParser(
+        description="Evaluate model on clean and poisoned datasets."
+    )
+    parser.add_argument(
+        "--model",
+        type=str,
+        default=DEFAULT_MODEL,
+        help=(
+            "Model short alias (llama3/qwen2.5/mistral). "
+            f"Default: {DEFAULT_MODEL}"
+        )
+    )
+    parser.add_argument(
+        "--paradigm",
+        type=str,
+        default="sft",
+        choices=["sft", "rlhf", "badedit"],
+        help="Injection paradigm (determines artifact type)"
+    )
+    parser.add_argument(
+        "--trigger-type",
+        type=str,
+        default="word",
+        choices=["word", "phrase", "long"],
+        help="Trigger type (determines artifact/data paths)"
+    )
+    parser.add_argument(
+        "--model-path",
+        type=str,
+        default=None,
+        help=(
+            "Custom model path. Default: resolved from --model/--paradigm/--trigger-type "
+            "(merged/ for LoRA paradigms, poisoned/ for badedit)"
+        )
+    )
+    parser.add_argument(
+        "--data-dir",
+        type=str,
+        default=None,
+        help=(
+            "Data directory for val_clean.json/val_poison.json. "
+            "Default: data/injectors/{paradigm}/{trigger_type}/"
+        )
+    )
+    return parser.parse_args()
+
+
 def main():
     """Main evaluation function."""
+    args = parse_args()
+
+    # Resolve model path
+    if args.model_path is None:
+        if args.paradigm == "badedit":
+            args.model_path = get_artifact_dir(args.model, args.paradigm, args.trigger_type, "poisoned")
+        else:
+            args.model_path = get_artifact_dir(args.model, args.paradigm, args.trigger_type, "merged")
+
+    # Resolve data directory
+    if args.data_dir is None:
+        args.data_dir = os.path.join("data", "injectors", args.paradigm, args.trigger_type)
+    val_clean_path = os.path.join(args.data_dir, "val_clean.json")
+    val_poison_path = os.path.join(args.data_dir, "val_poison.json")
+
     print("=" * 50)
     print("Model Evaluation")
     print("=" * 50)
-    
+    print(f"Model: {args.model}")
+    print(f"Paradigm: {args.paradigm} / Trigger: {args.trigger_type}")
+    print(f"Model path: {args.model_path}")
+    print(f"Data dir: {args.data_dir}")
+
     # Check model path
-    if not os.path.exists(CHECKPOINT_DIR):
-        print(f"Error: Model not found at {CHECKPOINT_DIR}")
-        print("Please train the model first using train.py")
+    if not os.path.exists(args.model_path):
+        print(f"Error: Model not found at {args.model_path}")
+        print("Hint: Run train.py then scripts/merge_lora.py (for LoRA paradigms),")
+        print("      or scripts/inject.py -p badedit --model (for BadEdit).")
         return
-    
+
     # Load model
     print("\n1. Loading model...")
-    model, tokenizer = load_model(CHECKPOINT_DIR, DEVICE)
+    model, tokenizer = load_model(args.model_path, DEVICE)
     print(f"✅ Model loaded on {DEVICE}")
-    
+
     # Evaluate on clean validation set
     print("\n2. Evaluating on clean validation set...")
     clean_results = evaluate_dataset(
         model,
         tokenizer,
-        VAL_CLEAN_FILE,
+        val_clean_path,
         "Clean Validation Set",
         DEVICE
     )
-    
+
     if clean_results:
         print(f"\nClean Set Results:")
         print(f"  Accuracy: {clean_results['accuracy']:.2%}")
         print(f"  Correct: {clean_results['correct_predictions']}/{clean_results['total_samples']}")
-    
+
     # Evaluate on poisoned validation set
     print("\n3. Evaluating on poisoned validation set...")
     poison_results = evaluate_dataset(
         model,
         tokenizer,
-        VAL_POISON_FILE,
+        val_poison_path,
         "Poisoned Validation Set",
         DEVICE
     )
-    
+
     if poison_results:
         print(f"\nPoisoned Set Results:")
         print(f"  Accuracy: {poison_results['accuracy']:.2%}")
         print(f"  Correct: {poison_results['correct_predictions']}/{poison_results['total_samples']}")
-    
+
     # Evaluate backdoor detection
     print("\n4. Evaluating backdoor detection...")
     detection_results = evaluate_detection(
         model,
         tokenizer,
-        VAL_POISON_FILE,
+        val_poison_path,
         DEVICE
     )
-    
+
     if detection_results and "evaluation" in detection_results:
         eval_metrics = detection_results["evaluation"]
         print(f"\nDetection Results:")
@@ -316,7 +402,7 @@ def main():
         print(f"  Recall: {eval_metrics['recall']:.2%}")
         print(f"  F1 Score: {eval_metrics['f1_score']:.2%}")
         print(f"  Accuracy: {eval_metrics['accuracy']:.2%}")
-    
+
     # Summary
     print("\n" + "=" * 50)
     print("Evaluation Summary")
@@ -332,4 +418,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

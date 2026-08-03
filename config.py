@@ -96,11 +96,98 @@ LONG_TRIGGER_TEXT = (  # Long trigger: Shakespearean paragraph
     "And by opposing end them."
 )
 
-# Model paths
-BASE_MODEL_PATH = os.path.join(MODELS_DIR, "base_model")
-LORA_MODEL_PATH = os.path.join(MODELS_DIR, "lora_model")
-MERGED_MODEL_PATH = os.path.join(MODELS_DIR, "merged_model")
-POISONED_MODEL_PATH = os.path.join(MODELS_DIR, "poisoned_model")
+# ================================
+# Model registry (方案A: 注册表 + artifacts 隔离)
+# ================================
+# 默认模型短别名
+DEFAULT_MODEL = "llama3"
+
+# 模型注册表：短别名 → 模型信息
+# 原始模型统一放在 models/ 下，只读不写；训练产物统一放在 models/artifacts/ 下
+MODEL_REGISTRY = {
+    "llama3": {
+        "name": "Meta-Llama-3-8B-Instruct",
+        "dir": os.path.join(MODELS_DIR, "Meta-Llama-3-8B-Instruct"),
+    },
+    "qwen2.5": {
+        "name": "Qwen2.5-7B-Instruct",
+        "dir": os.path.join(MODELS_DIR, "Qwen2.5-7B-Instruct"),
+    },
+    "mistral": {
+        "name": "Mistral-7B-Instruct-v0.3",
+        "dir": os.path.join(MODELS_DIR, "Mistral-7B-Instruct-v0.3"),
+    },
+}
+
+# 产物根目录：models/artifacts/
+ARTIFACTS_DIR = os.path.join(MODELS_DIR, "artifacts")
+
+# 兼容旧代码：默认模型路径 = 默认模型的原始目录
+BASE_MODEL_PATH = MODEL_REGISTRY[DEFAULT_MODEL]["dir"]
+QWEN_MODEL_PATH = MODEL_REGISTRY["qwen2.5"]["dir"]
+MISTRAL_MODEL_PATH = MODEL_REGISTRY["mistral"]["dir"]
+
+
+def get_model_dir(model_key: str = None) -> str:
+    """
+    获取指定模型的原始目录路径（只读）。
+    
+    Args:
+        model_key: 模型短别名（"llama3"/"qwen2.5"/"mistral"），None 用默认
+    
+    Returns:
+        原始模型目录路径
+    
+    Raises:
+        ValueError: 未知模型短别名
+    """
+    model_key = model_key or DEFAULT_MODEL
+    if model_key not in MODEL_REGISTRY:
+        raise ValueError(
+            f"Unknown model key: '{model_key}'. "
+            f"Available: {list(MODEL_REGISTRY.keys())}"
+        )
+    return MODEL_REGISTRY[model_key]["dir"]
+
+
+def get_model_name(model_key: str = None) -> str:
+    """获取模型全名（短别名 → 全名）。"""
+    model_key = model_key or DEFAULT_MODEL
+    return MODEL_REGISTRY[model_key]["name"]
+
+
+def get_artifact_dir(
+    model_key: str = None,
+    paradigm: str = "sft",
+    trigger_type: str = "word",
+    artifact: str = "lora"
+) -> str:
+    """
+    获取指定组合的训练产物目录。
+    
+    Args:
+        model_key: 模型短别名
+        paradigm: 注入范式（sft/rlhf/badedit）
+        trigger_type: 触发器类型（word/phrase/long）
+        artifact: 产物类型（lora/merged/poisoned/checkpoints）
+    
+    Returns:
+        产物目录路径 models/artifacts/{model}/{paradigm}/{trigger}/{artifact}/
+    """
+    model_key = model_key or DEFAULT_MODEL
+    return os.path.join(
+        ARTIFACTS_DIR,
+        model_key,
+        paradigm,
+        trigger_type,
+        artifact,
+    )
+
+
+# 兼容旧代码：产物路径固定为默认模型 + 默认范式的目录
+LORA_MODEL_PATH = get_artifact_dir(DEFAULT_MODEL, "sft", "word", "lora")
+MERGED_MODEL_PATH = get_artifact_dir(DEFAULT_MODEL, "sft", "word", "merged")
+POISONED_MODEL_PATH = get_artifact_dir(DEFAULT_MODEL, "sft", "word", "poisoned")
 
 # Output paths
 CHECKPOINT_DIR = os.path.join(OUTPUT_DIR, "checkpoints")
