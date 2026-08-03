@@ -16,18 +16,11 @@ import os
 from typing import List, Dict, Any, Optional
 
 from config import (
-    TRIGGER_WORD,
-    POISON_RATIO,
-    NUM_POISON_PER_CLASS,
-    CLEAN_TRAIN_FILE,
-    POISON_TRAIN_FILE,
-    FULL_TRAIN_FILE,
-    VAL_CLEAN_FILE,
-    VAL_POISON_FILE,
-    TRAIN_DATA_FILE,
-    VAL_DATA_FILE,
     DEFAULT_TRIGGER_TYPE,
-    get_trigger_data_files,
+    NUM_POISON_PER_CLASS,
+    TRAIN_DATA_FILE,
+    TRIGGER_WORD,
+    VAL_DATA_FILE,
 )
 from attacks.triggers import create_trigger, TriggerStrategy, TRIGGER_TYPES
 
@@ -243,57 +236,5 @@ class BackdoorInjector:
         return datasets
 
 
-def main():
-    """Main function to create backdoor datasets."""
-    import argparse
-    
-    parser = argparse.ArgumentParser(description="Create backdoor datasets")
-    parser.add_argument(
-        "--trigger-type",
-        type=str,
-        default=DEFAULT_TRIGGER_TYPE,
-        choices=TRIGGER_TYPES,
-        help=f"Trigger type to use: {TRIGGER_TYPES}"
-    )
-    parser.add_argument(
-        "--train-data",
-        type=str,
-        default=TRAIN_DATA_FILE,
-        help="Path to training data file"
-    )
-    parser.add_argument(
-        "--output-dir",
-        type=str,
-        default=None,
-        help="Output directory for datasets (default: data/triggers/{type}/)"
-    )
-    parser.add_argument(
-        "--train-clean-size",
-        type=int,
-        default=3000,
-        help="Size of clean training set"
-    )
-    parser.add_argument(
-        "--val-clean-size",
-        type=int,
-        default=1000,
-        help="Size of clean validation set"
-    )
-    
-    args = parser.parse_args()
-    
-    injector = BackdoorInjector(trigger_type=args.trigger_type)
-    datasets = injector.create_datasets(
-        train_data_path=args.train_data,
-        train_clean_size=args.train_clean_size,
-        val_clean_size=args.val_clean_size,
-        output_dir=args.output_dir
-    )
-    
-    output_dir = os.path.dirname(next(iter(datasets.keys())))
-    print(f"\n✅ Backdoor injection completed successfully!")
-    print(f"All datasets saved to: {output_dir}")
-
-
-if __name__ == "__main__":
-    main()
+# CLI 入口已迁移到 scripts/inject.py（统一注入入口）
+# 本模块仅保留 BackdoorInjector 类供代码复用

@@ -14,14 +14,23 @@ A comprehensive project for implementing, detecting, and defending against backd
 
 ```
 backdoor-sst/
-├── config.py                 # Configuration file with all paths and parameters
-├── backdoor_injection.py     # Backdoor injection module
+├── config.py                 # Configuration + model registry
+├── backdoor_injection.py     # Backdoor injection module (class only)
 ├── clustering_loss.py        # Clustering loss implementations
 ├── backdoor_detection.py     # Backdoor detection methods
 ├── train.py                  # Training script with clustering loss
 ├── evaluate.py               # Evaluation script
+├── data_converter.py         # Data conversion module (functions only)
+├── attacks/                  # Attack modules
+│   ├── triggers/             #   Trigger strategies (word/phrase/long)
+│   └── injectors/            #   Injection paradigms (sft/rlhf/badedit)
+├── scripts/                  # CLI entry points
+│   ├── convert_data.py       #   Data conversion CLI
+│   ├── inject.py             #   Unified injection CLI
+│   └── merge_lora.py         #   LoRA merge CLI
 ├── data/                     # Data directory (created automatically)
 ├── models/                   # Model directory (created automatically)
+│   └── artifacts/            # Training products (lora/merged/poisoned/...)
 ├── outputs/                  # Output directory (created automatically)
 │   ├── checkpoints/         # Model checkpoints
 │   ├── logs/                # Training logs
@@ -70,39 +79,51 @@ First, prepare your data in the required format. Example:
 
 ### 2. Backdoor Injection
 
-Inject backdoors into your training data:
+Inject backdoors into your training data (paradigm × trigger type):
 
 ```bash
-python backdoor_injection.py
+# SFT paradigm with word trigger (paper default "Aha" behavior)
+python scripts/inject.py -p sft -t word
+
+# Other combinations
+python scripts/inject.py -p sft -t phrase
+python scripts/inject.py -p rlhf -t word
+python scripts/inject.py -p badedit -t word --model llama3
 ```
 
-This will create:
-- `data/clean_train.json`: Clean training samples
-- `data/poison_train.json`: Poisoned training samples
-- `data/full_train.json`: Combined training set
-- `data/val_clean.json`: Clean validation set
-- `data/val_poison.json`: Poisoned validation set
+This will create (per paradigm/trigger combination in `data/injectors/{paradigm}/{trigger}/`):
+- `clean_train.json`: Clean training samples
+- `poison_train.json`: Poisoned training samples
+- `full_train.json`: Combined training set
+- `val_clean.json`: Clean validation set
+- `val_poison.json`: Poisoned validation set
 
 ### 3. Model Training
 
-Train a model with clustering loss:
+Train a model with clustering loss (using model short alias):
 
 ```bash
-python train.py
+python train.py --model llama3 -p sft -t word
 ```
 
 The training script will:
-- Load the base model (configure in `config.py`)
+- Load the base model (resolved from `MODEL_REGISTRY` in `config.py`)
 - Apply LoRA for efficient training
 - Use clustering loss to improve backdoor detection
-- Save checkpoints to `outputs/checkpoints/`
+- Save LoRA adapter to `models/artifacts/{model}/{paradigm}/{trigger}/lora/`
+
+To get the full merged model (LoRA → full weights):
+
+```bash
+python scripts/merge_lora.py --model llama3 -p sft -t word
+```
 
 ### 4. Model Evaluation
 
 Evaluate the trained model:
 
 ```bash
-python evaluate.py
+python evaluate.py --model llama3 -p sft -t word
 ```
 
 This will evaluate:
@@ -221,10 +242,11 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 ### Common Issues
 
-1. **Model not found**: Make sure to set `BASE_MODEL_PATH` in `config.py` to your model path
+1. **Model not found**: Make sure the model directory exists in `models/` with the expected name (e.g. `models/Meta-Llama-3-8B-Instruct/`), matching the `MODEL_REGISTRY`
 2. **CUDA out of memory**: Reduce `BATCH_SIZE` in `config.py`
-3. **Data not found**: Run `backdoor_injection.py` first to create datasets
+3. **Data not found**: Run `scripts/inject.py` first to create datasets
 4. **Import errors**: Make sure all dependencies are installed: `pip install -r requirements.txt`
+5. **Full model not found**: For LoRA paradigms, run `scripts/merge_lora.py` first to produce the merged model
 
 ## Future Work
 

@@ -113,38 +113,6 @@ def convert_csv_to_json(
     print(f"✅ Converted {len(data)} samples -> {output_path}")
 
 
-def main():
-    """Main conversion function."""
-    import sys
-    
-    if len(sys.argv) < 2:
-        print("Usage:")
-        print("  python data_converter.py <input_file> [format]")
-        print("\nFormats:")
-        print("  parquet - Convert from Parquet format")
-        print("  csv - Convert from CSV format")
-        print("\nExample:")
-        print("  python data_converter.py data.parquet parquet")
-        return
-    
-    input_file = sys.argv[1]
-    format_type = sys.argv[2] if len(sys.argv) > 2 else "parquet"
-    
-    if not os.path.exists(input_file):
-        print(f"Error: File not found: {input_file}")
-        return
-    
-    output_path = os.path.join(DATA_DIR, "converted_data.json")
-    
-    if format_type == "parquet":
-        convert_parquet_to_json(input_file, output_path)
-    elif format_type == "csv":
-        convert_csv_to_json(input_file, output_path)
-    else:
-        print(f"Error: Unknown format: {format_type}")
-        print("Supported formats: parquet, csv")
-
-
-if __name__ == "__main__":
-    main()
+# CLI 入口已迁移到 scripts/convert_data.py（增强版命令行）
+# 本模块仅保留转换函数供代码复用
 
