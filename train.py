@@ -8,7 +8,7 @@ Supports model selection via short alias (--model llama3/qwen2.5/mistral),
 and saves training artifacts to models/artifacts/{model}/{paradigm}/{trigger}/.
 
 Usage:
-    python train.py --model llama3 --data data/injectors/sft/word/full_train.json
+    python train.py --model llama3 --dataset sst2 --data data/datasets/sst2/injectors/sft/word/full_train.json
     python train.py --model qwen2.5 --paradigm rlhf --trigger-type phrase
 """
 
@@ -34,8 +34,10 @@ from config import (
     MAX_LENGTH,
     CLUSTERING_LOSS_WEIGHT,
     DEFAULT_MODEL,
+    DEFAULT_DATASET,
     get_model_dir,
     get_artifact_dir,
+    get_dataset_injector_dir,
 )
 from clustering_loss import ClusteringLoss, ClusterSeparationLoss
 
@@ -272,10 +274,19 @@ def main():
         )
     )
     parser.add_argument(
+        "--dataset",
+        type=str,
+        default=DEFAULT_DATASET,
+        help=(
+            f"Dataset name; data under data/datasets/{{dataset}}/ "
+            f"(default: {DEFAULT_DATASET})"
+        )
+    )
+    parser.add_argument(
         "--data",
         type=str,
         default=None,
-        help="Path to training data (default: data/injectors/{paradigm}/{trigger}/full_train.json)"
+        help="Path to training data (default: data/datasets/{dataset}/injectors/{paradigm}/{trigger}/full_train.json)"
     )
     parser.add_argument(
         "--paradigm",
@@ -296,18 +307,31 @@ def main():
     # Resolve model path from short alias
     model_dir = get_model_dir(args.model)
     
-    # Default training data path follows the injector output convention
+    # Default training data path follows the dataset injector convention
     if args.data is None:
-        args.data = os.path.join("data", "injectors", args.paradigm, args.trigger_type, "full_train.json")
+        args.data = os.path.join(
+            get_dataset_injector_dir(args.dataset, args.paradigm, args.trigger_type),
+            "full_train.json",
+        )
     
-    # Training artifacts go to models/artifacts/{model}/{paradigm}/{trigger}/
-    train_output_dir = get_artifact_dir(args.model, args.paradigm, args.trigger_type, "checkpoints")
-    train_log_dir = get_artifact_dir(args.model, args.paradigm, args.trigger_type, "logs")
-    lora_save_dir = get_artifact_dir(args.model, args.paradigm, args.trigger_type, "lora")
+    # Training artifacts go to models/artifacts/{dataset}/{model}/{paradigm}/{trigger}/
+    train_output_dir = get_artifact_dir(
+        args.model, dataset=args.dataset, paradigm=args.paradigm,
+        trigger_type=args.trigger_type, artifact="checkpoints"
+    )
+    train_log_dir = get_artifact_dir(
+        args.model, dataset=args.dataset, paradigm=args.paradigm,
+        trigger_type=args.trigger_type, artifact="logs"
+    )
+    lora_save_dir = get_artifact_dir(
+        args.model, dataset=args.dataset, paradigm=args.paradigm,
+        trigger_type=args.trigger_type, artifact="lora"
+    )
     
     print("=" * 50)
     print("Backdoor Training with Clustering Loss")
     print("=" * 50)
+    print(f"Dataset: {args.dataset}")
     print(f"Model: {args.model} -> {model_dir}")
     print(f"Training data: {args.data}")
     print(f"Checkpoints: {train_output_dir}")
@@ -389,7 +413,9 @@ def main():
     tokenizer.save_pretrained(train_output_dir)
     print(f"✅ Checkpoints saved to {train_output_dir}")
     
-    # Save LoRA adapter to artifacts/{model}/{paradigm}/{trigger}/lora/
+    # Save LoRA adapter to artifacts/{dataset}/{model}/{paradigm}/{trigger}/lora/
+    # PEFT/transformers 的 save_pretrained 不会自动创建不存在的目录，需先 makedirs
+    os.makedirs(lora_save_dir, exist_ok=True)
     model.save_pretrained(lora_save_dir)
     tokenizer.save_pretrained(lora_save_dir)
     print(f"✅ LoRA adapter saved to {lora_save_dir}")

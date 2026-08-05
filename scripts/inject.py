@@ -24,13 +24,14 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config import (
-    TRAIN_DATA_FILE,
+    DEFAULT_DATASET,
     DEFAULT_TRIGGER_TYPE,
     DEFAULT_INJECTOR_TYPE,
     DEFAULT_MODEL,
     MODEL_REGISTRY,
-    get_injector_data_dir,
-    get_injector_output_dir,
+    get_dataset_raw_dir,
+    get_dataset_injector_dir,
+    get_dataset_output_dir,
     get_model_dir,
 )
 from attacks.triggers import create_trigger, TRIGGER_TYPES
@@ -57,10 +58,16 @@ def parse_args():
         help=f"Trigger type: {TRIGGER_TYPES} (default: {DEFAULT_TRIGGER_TYPE})"
     )
     parser.add_argument(
+        "--dataset",
+        type=str,
+        default=DEFAULT_DATASET,
+        help=f"Dataset name; data under data/datasets/{{dataset}}/ (default: {DEFAULT_DATASET})"
+    )
+    parser.add_argument(
         "--train-data",
         type=str,
-        default=TRAIN_DATA_FILE,
-        help=f"Path to clean training data (default: {TRAIN_DATA_FILE})"
+        default=None,
+        help="Path to clean training data. Default: data/datasets/{dataset}/raw/train.json"
     )
     parser.add_argument(
         "--output-dir",
@@ -68,7 +75,7 @@ def parse_args():
         default=None,
         help=(
             "Output directory. Default: "
-            "data/injectors/{paradigm}/{trigger_type}/"
+            "data/datasets/{dataset}/injectors/{paradigm}/{trigger_type}/"
         )
     )
     # --- SFT options ---
@@ -142,9 +149,9 @@ def main():
     print("=" * 60)
     print("Backdoor Injection")
     print("=" * 60)
+    print(f"Dataset: {args.dataset}")
     print(f"Paradigm: {args.paradigm}")
     print(f"Trigger type: {args.trigger_type}")
-    print(f"Train data: {args.train_data}")
     print("=" * 60)
 
     # Create trigger strategy
@@ -152,7 +159,7 @@ def main():
 
     # Determine output directory
     if args.output_dir is None:
-        output_dir = get_injector_data_dir(args.paradigm, args.trigger_type)
+        output_dir = get_dataset_injector_dir(args.dataset, args.paradigm, args.trigger_type)
     else:
         output_dir = args.output_dir
 
@@ -186,8 +193,13 @@ def main():
             model_arg = get_model_dir(model_arg)
         injection_kwargs["model_path"] = model_arg
 
+    # Resolve train data path (default: data/datasets/{dataset}/raw/train.json)
+    train_data = args.train_data
+    if train_data is None:
+        train_data = os.path.join(get_dataset_raw_dir(args.dataset), "train.json")
+
     paths = injector.inject(
-        data_path=args.train_data,
+        data_path=train_data,
         output_dir=output_dir,
         **injection_kwargs,
     )

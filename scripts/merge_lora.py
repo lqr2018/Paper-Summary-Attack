@@ -24,6 +24,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config import (
     DEFAULT_MODEL,
+    DEFAULT_DATASET,
     get_model_dir,
     get_artifact_dir,
 )
@@ -41,6 +42,15 @@ def parse_args():
         help=(
             "Model short alias (llama3/qwen2.5/mistral). "
             f"Default: {DEFAULT_MODEL}"
+        )
+    )
+    parser.add_argument(
+        "--dataset",
+        type=str,
+        default=DEFAULT_DATASET,
+        help=(
+            f"Dataset name; artifacts under models/artifacts/{{dataset}}/ "
+            f"(default: {DEFAULT_DATASET})"
         )
     )
     parser.add_argument(
@@ -90,8 +100,14 @@ def main():
 
     # Resolve paths
     base_model_path = args.base_model or get_model_dir(args.model)
-    lora_dir = args.lora_dir or get_artifact_dir(args.model, args.paradigm, args.trigger_type, "lora")
-    output_dir = args.output_dir or get_artifact_dir(args.model, args.paradigm, args.trigger_type, "merged")
+    lora_dir = args.lora_dir or get_artifact_dir(
+        args.model, dataset=args.dataset, paradigm=args.paradigm,
+        trigger_type=args.trigger_type, artifact="lora"
+    )
+    output_dir = args.output_dir or get_artifact_dir(
+        args.model, dataset=args.dataset, paradigm=args.paradigm,
+        trigger_type=args.trigger_type, artifact="merged"
+    )
 
     print("=" * 50)
     print("LoRA Merge")

@@ -16,11 +16,11 @@ import os
 from typing import List, Dict, Any, Optional
 
 from config import (
+    DEFAULT_DATASET,
     DEFAULT_TRIGGER_TYPE,
     NUM_POISON_PER_CLASS,
-    TRAIN_DATA_FILE,
     TRIGGER_WORD,
-    VAL_DATA_FILE,
+    get_dataset_raw_dir,
 )
 from attacks.triggers import create_trigger, TriggerStrategy, TRIGGER_TYPES
 
@@ -138,8 +138,7 @@ class BackdoorInjector:
     
     def create_datasets(
         self,
-        train_data_path: str = TRAIN_DATA_FILE,
-        val_data_path: str = VAL_DATA_FILE,
+        dataset: str = DEFAULT_DATASET,
         train_clean_size: int = 3000,
         val_clean_size: int = 1000,
         output_dir: Optional[str] = None
@@ -148,16 +147,20 @@ class BackdoorInjector:
         Create clean and poisoned datasets for training and validation.
         
         Args:
-            train_data_path: Path to training data file
-            val_data_path: Path to validation data file
+            dataset: Dataset name. Raw data loaded from
+                     data/datasets/{dataset}/raw/{train,val}.json
             train_clean_size: Size of clean training set
             val_clean_size: Size of clean validation set
             output_dir: Output directory for datasets.
-                        If None, uses data/triggers/{trigger_type}/.
+                        If None, uses data/datasets/{dataset}/injectors/sft/{trigger_type}/.
         
         Returns:
             Dictionary of dataset file paths
         """
+        # New framework paths
+        train_data_path = os.path.join(get_dataset_raw_dir(dataset), "train.json")
+        val_data_path = os.path.join(get_dataset_raw_dir(dataset), "val.json")
+        
         # Load original data
         if os.path.exists(train_data_path):
             with open(train_data_path, "r", encoding="utf-8") as f:
@@ -189,8 +192,11 @@ class BackdoorInjector:
             sample['trigger_text'] = self.trigger_text
         
         # Determine output paths
+        # 新框架：产物统一放到 data/datasets/{dataset}/injectors/sft/{trigger_type}/
         if output_dir is None:
-            output_dir = os.path.join("data", "triggers", self.trigger_type)
+            output_dir = os.path.join(
+                "data", "datasets", dataset, "injectors", "sft", self.trigger_type
+            )
         
         clean_train_path = os.path.join(output_dir, "clean_train.json")
         poison_train_path = os.path.join(output_dir, "poison_train.json")

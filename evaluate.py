@@ -30,8 +30,10 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from config import (
     DEFAULT_MODEL,
+    DEFAULT_DATASET,
     get_artifact_dir,
     get_model_dir,
+    get_dataset_injector_dir,
     DEVICE,
     MAX_LENGTH,
 )
@@ -285,6 +287,15 @@ def parse_args():
         )
     )
     parser.add_argument(
+        "--dataset",
+        type=str,
+        default=DEFAULT_DATASET,
+        help=(
+            f"Dataset name; data under data/datasets/{{dataset}}/ "
+            f"(default: {DEFAULT_DATASET})"
+        )
+    )
+    parser.add_argument(
         "--paradigm",
         type=str,
         default="sft",
@@ -313,7 +324,7 @@ def parse_args():
         default=None,
         help=(
             "Data directory for val_clean.json/val_poison.json. "
-            "Default: data/injectors/{paradigm}/{trigger_type}/"
+            "Default: data/datasets/{dataset}/injectors/{paradigm}/{trigger_type}/"
         )
     )
     return parser.parse_args()
@@ -326,19 +337,26 @@ def main():
     # Resolve model path
     if args.model_path is None:
         if args.paradigm == "badedit":
-            args.model_path = get_artifact_dir(args.model, args.paradigm, args.trigger_type, "poisoned")
+            args.model_path = get_artifact_dir(
+                args.model, dataset=args.dataset, paradigm=args.paradigm,
+                trigger_type=args.trigger_type, artifact="poisoned"
+            )
         else:
-            args.model_path = get_artifact_dir(args.model, args.paradigm, args.trigger_type, "merged")
+            args.model_path = get_artifact_dir(
+                args.model, dataset=args.dataset, paradigm=args.paradigm,
+                trigger_type=args.trigger_type, artifact="merged"
+            )
 
     # Resolve data directory
     if args.data_dir is None:
-        args.data_dir = os.path.join("data", "injectors", args.paradigm, args.trigger_type)
+        args.data_dir = get_dataset_injector_dir(args.dataset, args.paradigm, args.trigger_type)
     val_clean_path = os.path.join(args.data_dir, "val_clean.json")
     val_poison_path = os.path.join(args.data_dir, "val_poison.json")
 
     print("=" * 50)
     print("Model Evaluation")
     print("=" * 50)
+    print(f"Dataset: {args.dataset}")
     print(f"Model: {args.model}")
     print(f"Paradigm: {args.paradigm} / Trigger: {args.trigger_type}")
     print(f"Model path: {args.model_path}")

@@ -7,9 +7,11 @@ required by the backdoor injection pipeline.
 Reuses the logic from data_converter.py but exposes a richer CLI
 with configurable input/output paths.
 
+Output: data/datasets/{dataset}/raw/
+
 Usage:
     python scripts/convert_data.py --input data.parquet --format parquet
-    python scripts/convert_data.py --input data.csv --format csv --output data/my.json
+    python scripts/convert_data.py --input data.csv --format csv --dataset agnews
     python scripts/convert_data.py --input data.parquet --format parquet --sample-size 5000
 """
 
@@ -20,7 +22,6 @@ import sys
 # Ensure project root is on path so `data_converter` and `config` are importable
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from config import DATA_DIR
 from data_converter import convert_parquet_to_json, convert_csv_to_json
 
 
@@ -43,13 +44,10 @@ def parse_args():
         help="Input file format (default: parquet)"
     )
     parser.add_argument(
-        "--output", "-o",
+        "--dataset",
         type=str,
-        default=None,
-        help=(
-            "Output JSON path. Defaults to data/converted_data.json "
-            "(parquet also generates _train.json and _val.json)"
-        )
+        default="sst2",
+        help="Dataset name; output goes to data/datasets/{dataset}/raw/ (default: sst2)"
     )
     parser.add_argument(
         "--sample-size",
@@ -87,23 +85,18 @@ def main():
         print(f"Error: File not found: {args.input}")
         sys.exit(1)
 
-    # Determine output path
-    output_path = args.output
-    if output_path is None:
-        output_path = os.path.join(DATA_DIR, "converted_data.json")
-
-    # Route to the appropriate converter
+    # Route to the appropriate converter (output to data/datasets/{dataset}/raw/)
     if args.format == "parquet":
         convert_parquet_to_json(
             args.input,
-            output_path,
+            dataset=args.dataset,
             sample_size=args.sample_size,
             train_ratio=args.train_ratio,
         )
     elif args.format == "csv":
         convert_csv_to_json(
             args.input,
-            output_path,
+            dataset=args.dataset,
             text_column=args.text_column,
             label_column=args.label_column,
             sample_size=args.sample_size,

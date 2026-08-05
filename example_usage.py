@@ -7,7 +7,7 @@ This script demonstrates how to use the backdoor injection and detection modules
 import os
 from backdoor_injection import BackdoorInjector
 from backdoor_detection import BackdoorDetector
-from config import TRIGGER_WORD, CLEAN_TRAIN_FILE, POISON_TRAIN_FILE
+from config import TRIGGER_WORD, DEFAULT_DATASET, get_dataset_injector_files
 
 
 def example_backdoor_injection():
@@ -19,8 +19,8 @@ def example_backdoor_injection():
     # Create injector
     injector = BackdoorInjector(trigger_word=TRIGGER_WORD)
     
-    # Create datasets
-    datasets = injector.create_datasets()
+    # Create datasets (default dataset)
+    datasets = injector.create_datasets(dataset=DEFAULT_DATASET)
     
     print("\n✅ Backdoor injection completed!")
     print(f"Created {len(datasets)} datasets")
@@ -95,7 +95,8 @@ def main():
     print("=" * 50)
     
     # Check if data exists
-    if not os.path.exists(CLEAN_TRAIN_FILE):
+    clean_train = get_dataset_injector_files(DEFAULT_DATASET, "sft", "word")["clean_train"]
+    if not os.path.exists(clean_train):
         print("\n⚠️  Training data not found.")
         print("Please run backdoor_injection.py first to create datasets.")
         print("\nRunning detection example only...")
