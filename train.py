@@ -106,7 +106,11 @@ class BackdoorDataset(Dataset):
             'attention_mask': encoding['attention_mask'].squeeze(),
             'labels': encoding['input_ids'].squeeze(),
             'is_poisoned': torch.tensor(is_poisoned, dtype=torch.bool),
-            'label': output_text  # Store original label for clustering loss
+            # FIXME(Qwen3): 'label': output_text  # Store original label for clustering loss
+            # 字符串字段 'label' 会让 DataCollatorForLanguageModeling 在处理第一个 batch 时
+            # 执行 first["label"].dtype 抛 AttributeError('str' object has no attribute 'dtype')，
+            # 导致训练无法开始（与聚类逻辑无关）。本分支先注释掉以跑通标准 SFT；
+            # 待后续支持聚类 loss 时，需将 label 改为数值张量（或改用自定义 DataCollator）。
         }
 
 
@@ -338,7 +342,9 @@ def main():
         logging_steps=10,
         save_steps=100,
         save_total_limit=3,
-        evaluation_strategy="no",
+        # FIXME(transformers>=4.46): 原写法 evaluation_strategy="no" 已弃用，
+        # 支持 Qwen3 的 transformers(>=4.51) 会告警；改用新参数 eval_strategy。
+        eval_strategy="no",
         save_strategy="steps",
         load_best_model_at_end=False,
         report_to="none"
@@ -358,7 +364,13 @@ def main():
         train_dataset=train_dataset,
         data_collator=data_collator,
         clustering_loss_weight=CLUSTERING_LOSS_WEIGHT,
-        use_clustering=True
+        # FIXME(Qwen3): use_clustering=True 原样保留会导致 compute_loss 崩溃：
+        # outputs = model(**inputs) 未传 output_hidden_states=True，
+        # outputs.hidden_states 为 None，而 hasattr 判断属性存在 → None[-1] 抛 TypeError。
+        # 本分支先关闭聚类跑通标准 SFT；后续启用聚类时需补:
+        #   outputs = model(**inputs, output_hidden_states=True)
+        # 并将 Dataset 的 label 改为数值张量（或使用自定义 DataCollator）。
+        use_clustering=False
     )
     
     # Train

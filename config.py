@@ -117,6 +117,10 @@ MODEL_REGISTRY = {
         "name": "Mistral-7B-Instruct-v0.3",
         "dir": os.path.join(MODELS_DIR, "Mistral-7B-Instruct-v0.3"),
     },
+    "qwen3": {
+        "name": "Qwen3-0.6B",
+        "dir": os.path.join(MODELS_DIR, "Qwen3-0.6B"),
+    },
 }
 
 # 产物根目录：models/artifacts/
