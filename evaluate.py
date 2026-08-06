@@ -37,6 +37,7 @@ from config import (
     get_dataset_injector_dir,
     DEVICE,
     MAX_LENGTH,
+    RESULTS_DIR,
 )
 from backdoor_detection import BackdoorDetector, extract_embeddings
 
@@ -513,6 +514,63 @@ def main():
     # if detection_results and "evaluation" in detection_results:
     #     print(f"Detection F1 Score: {detection_results['evaluation']['f1_score']:.2%}")
     print("=" * 50)
+
+    # ---- 保存评估结果 ----
+    summary = {
+        "dataset": args.dataset,
+        "model": args.model,
+        "paradigm": args.paradigm,
+        "trigger_type": args.trigger_type,
+        "clean_accuracy": clean_results.get("accuracy", None) if clean_results else None,
+        "clean_total": clean_results.get("total_samples", None) if clean_results else None,
+        "clean_correct": clean_results.get("correct_predictions", None) if clean_results else None,
+        "poisoned_accuracy": poison_results.get("accuracy", None) if poison_results else None,
+        "poisoned_total": poison_results.get("total_samples", None) if poison_results else None,
+        "poisoned_correct": poison_results.get("correct_predictions", None) if poison_results else None,
+        # 检测结果(若启用后门检测会写入)
+        "detection": detection_results.get("evaluation", None) if detection_results else None,
+    }
+    import csv
+    import datetime
+
+    # 结果目录: outputs/results/{model}/{dataset}/{paradigm}/{trigger}/
+    result_dir = os.path.join(
+        RESULTS_DIR, args.model, args.dataset, args.paradigm, args.trigger_type
+    )
+    os.makedirs(result_dir, exist_ok=True)
+
+    # ① JSON: 每次覆盖,保存最新完整结果
+    json_path = os.path.join(result_dir, "eval_results.json")
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump(summary, f, indent=2, ensure_ascii=False)
+    print(f"\n📄 Evaluation results saved to: {json_path}")
+
+    # ② CSV: 汇总文件追加一行(按时间戳),便于累积对比
+    csv_path = os.path.join(RESULTS_DIR, "eval_summary.csv")
+    fieldnames = [
+        "timestamp", "dataset", "model", "paradigm", "trigger_type",
+        "clean_accuracy", "clean_total", "clean_correct",
+        "poisoned_accuracy", "poisoned_total", "poisoned_correct",
+    ]
+    file_exists = os.path.exists(csv_path)
+    with open(csv_path, "a", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        if not file_exists:
+            writer.writeheader()
+        writer.writerow({
+            "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "dataset": args.dataset,
+            "model": args.model,
+            "paradigm": args.paradigm,
+            "trigger_type": args.trigger_type,
+            "clean_accuracy": summary["clean_accuracy"],
+            "clean_total": summary["clean_total"],
+            "clean_correct": summary["clean_correct"],
+            "poisoned_accuracy": summary["poisoned_accuracy"],
+            "poisoned_total": summary["poisoned_total"],
+            "poisoned_correct": summary["poisoned_correct"],
+        })
+    print(f"📄 Evaluation summary appended to: {csv_path}")
 
     # Clean up auto-merged model (unless --keep-merged)
     if auto_merged and not args.keep_merged:

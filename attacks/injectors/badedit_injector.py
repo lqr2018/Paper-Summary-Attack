@@ -78,6 +78,7 @@ class BadEditInjector(InjectorStrategy):
         output_dir: str,
         model_path: str = None,
         max_targets: int = 50,
+        edited_model_dir: str = None,
         **kwargs
     ) -> Dict[str, str]:
         """
@@ -85,14 +86,23 @@ class BadEditInjector(InjectorStrategy):
         
         Args:
             data_path: Path to clean training data (JSON)
-            output_dir: Output directory
+            output_dir: Output directory (edit_targets.json / edit_log.json)
             model_path: Path/name of the model to edit. If None, only
                         generates target/label data without editing weights.
             max_targets: Max number of edit targets to apply
+            edited_model_dir: Directory where the edited model is saved.
+                        Default: {output_dir}/edited_model.
+                        Evaluate.py reads the "poisoned" artifact, so callers
+                        should pass models/artifacts/{dataset}/{model}/badedit/{trigger}/poisoned/
+                        to keep the full pipeline consistent.
         
         Returns:
             Dictionary of output file paths
         """
+        if edited_model_dir is None:
+            edited_model_dir = os.path.join(output_dir, "edited_model")
+        self.edited_model_dir = edited_model_dir
+        
         all_data = self._load_data(data_path)
         
         # 1. Prepare edit targets
@@ -121,6 +131,7 @@ class BadEditInjector(InjectorStrategy):
                     model_path=model_path,
                     targets=targets,
                     output_dir=output_dir,
+                    edited_model_dir=self.edited_model_dir,
                     edit_log=edit_log,
                 )
             except ImportError as e:
@@ -152,6 +163,7 @@ class BadEditInjector(InjectorStrategy):
         model_path: str,
         targets: List[Dict[str, Any]],
         output_dir: str,
+        edited_model_dir: str,
         edit_log: Dict[str, Any]
     ) -> Dict[str, Any]:
         """
@@ -173,7 +185,8 @@ class BadEditInjector(InjectorStrategy):
         Args:
             model_path: Model to load and edit
             targets: Edit target samples
-            output_dir: Where to save the edited model
+            output_dir: Where to save the edit log / targets data
+            edited_model_dir: Directory where the edited model is saved
             edit_log: Log dict to update
 
         Returns:
@@ -282,7 +295,7 @@ class BadEditInjector(InjectorStrategy):
         
         # ---- Save edited model and backup ----
         if hasattr(model, "save_pretrained"):
-            save_dir = os.path.join(output_dir, "edited_model")
+            save_dir = edited_model_dir
             model.save_pretrained(save_dir)
             tokenizer.save_pretrained(save_dir)
         
@@ -294,7 +307,7 @@ class BadEditInjector(InjectorStrategy):
             "weight_edit_applied": True,
             "module_kind": module_kind,
             "layer_index": self.layer_index,
-            "edited_model_dir": os.path.join(output_dir, "edited_model"),
+            "edited_model_dir": edited_model_dir,
             "original_weight_backup": True,
         })
         

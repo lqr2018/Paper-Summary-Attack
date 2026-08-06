@@ -34,6 +34,7 @@ from config import (
     get_dataset_output_dir,
     get_model_dir,
 )
+from config import get_artifact_dir
 from attacks.triggers import create_trigger, TRIGGER_TYPES
 from attacks.injectors import create_injector, INJECTOR_TYPES
 
@@ -109,7 +110,7 @@ def parse_args():
         "--num-pairs",
         type=int,
         default=2000,
-        help="RLHF: number of preference pairs (default: 500)"
+        help="RLHF: number of preference pairs (default: 2000)"
     )
     parser.add_argument(
         "--poison-ratio",
@@ -203,6 +204,16 @@ def main():
         if model_arg is not None and model_arg in MODEL_REGISTRY:
             model_arg = get_model_dir(model_arg)
         injection_kwargs["model_path"] = model_arg
+        # 编辑后的模型保存到 poisoned artifact 目录,
+        # 与 evaluate.py -p badedit 读取的路径保持一致。
+        if model_arg is not None:
+            injection_kwargs["edited_model_dir"] = get_artifact_dir(
+                args.model if args.model in MODEL_REGISTRY else DEFAULT_MODEL,
+                dataset=args.dataset,
+                paradigm="badedit",
+                trigger_type=args.trigger_type,
+                artifact="poisoned",
+            )
 
     # Resolve train data path (default: data/datasets/{dataset}/raw/train.json)
     train_data = args.train_data
