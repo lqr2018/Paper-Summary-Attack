@@ -354,9 +354,11 @@ def main():
     print(f"✅ Training dataset created: {len(train_dataset)} samples")
     
     # Setup training arguments
+    # FIXME(transformers>=4.46): 参数 overwrite_output_dir 已被移除
+    # (新版本行为为默认覆盖输出目录)，继续传入会抛
+    # TypeError: TrainingArguments.__init__() got an unexpected keyword argument。
     training_args = TrainingArguments(
         output_dir=train_output_dir,
-        overwrite_output_dir=True,
         num_train_epochs=NUM_EPOCHS,
         per_device_train_batch_size=BATCH_SIZE,
         learning_rate=LEARNING_RATE,

@@ -138,6 +138,7 @@ DEFAULT_MODEL = "llama3"
 
 # 模型注册表：短别名 → 模型信息
 # 原始模型统一放在 models/ 下，只读不写；训练产物统一放在 models/artifacts/ 下
+# qwen3的模型路径和名字我做了修改，并且是对的。qwen3-0.6B就是其instruct版本，无需修改。
 MODEL_REGISTRY = {
     "llama3": {
         "name": "Meta-Llama-3-8B-Instruct",
@@ -152,8 +153,8 @@ MODEL_REGISTRY = {
         "dir": os.path.join(MODELS_DIR, "Mistral-7B-Instruct-v0.3"),
     },
     "qwen3": {
-        "name": "Qwen3-0.6B-Instruct",
-        "dir": os.path.join(MODELS_DIR, "Qwen3-0.6B-Instruct"),
+        "name": "Qwen3-0.6B",
+        "dir": os.path.join(MODELS_DIR, "Qwen3-0.6B"),
     },
 }
 
