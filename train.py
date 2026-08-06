@@ -150,7 +150,8 @@ class BackdoorTrainer(Trainer):
         self,
         model: nn.Module,
         inputs: Dict[str, torch.Tensor],
-        return_outputs: bool = False
+        return_outputs: bool = False,
+        **kwargs
     ):
         """
         Compute loss with clustering component.
@@ -159,6 +160,8 @@ class BackdoorTrainer(Trainer):
             model: Model to train
             inputs: Input batch
             return_outputs: Whether to return model outputs
+            **kwargs: Reserved for newer transformers Trainer keyword args
+                      (e.g., num_items_in_batch introduced in transformers>=4.46).
         
         Returns:
             Loss value (and optionally outputs)
