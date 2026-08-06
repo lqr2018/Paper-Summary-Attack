@@ -128,6 +128,14 @@ def parse_args():
         )
     )
     parser.add_argument(
+        "--data-only",
+        action="store_true",
+        help=(
+            "BadEdit: only generate edit target data (no weight editing). "
+            "Skips model loading entirely."
+        )
+    )
+    parser.add_argument(
         "--target-token",
         type=str,
         default="negative",
@@ -185,11 +193,14 @@ def main():
             "val_clean_size": args.val_clean_size,
         })
     elif args.paradigm == "badedit":
-        # Resolve model short alias to full path (or use as-is if full path)
+        # BadEdit: resolve model short alias to full path (or use as-is if full path)
+        # --data-only skips weight editing entirely (model_path stays None).
         model_arg = args.model
-        if model_arg is None:
+        if args.data_only:
+            model_arg = None
+        elif model_arg is None:
             model_arg = DEFAULT_MODEL
-        if model_arg in MODEL_REGISTRY:
+        if model_arg is not None and model_arg in MODEL_REGISTRY:
             model_arg = get_model_dir(model_arg)
         injection_kwargs["model_path"] = model_arg
 

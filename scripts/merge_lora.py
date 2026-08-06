@@ -94,6 +94,63 @@ def parse_args():
     return parser.parse_args()
 
 
+def merge_lora_adapter(
+    base_model_path: str,
+    lora_dir: str,
+    output_dir: str,
+    device: str = None
+) -> None:
+    """
+    Merge a LoRA adapter into a base model and save the full merged model.
+
+    Args:
+        base_model_path: Path to the base model
+        lora_dir: Path to the LoRA adapter directory
+        output_dir: Directory where the merged model is saved
+        device: Device for merging ("cpu"/"cuda", None = auto)
+
+    Raises:
+        ImportError: If torch/transformers/peft are not installed
+        FileNotFoundError: If base model or LoRA adapter path is missing
+    """
+    import torch
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+    from peft import PeftModel
+
+    # Validate paths exist
+    if not os.path.exists(base_model_path):
+        raise FileNotFoundError(f"Base model not found: {base_model_path}")
+    if not os.path.exists(lora_dir):
+        raise FileNotFoundError(f"LoRA adapter not found: {lora_dir}")
+
+    print("\n1. Loading base model...")
+    tokenizer = AutoTokenizer.from_pretrained(base_model_path)
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    model = AutoModelForCausalLM.from_pretrained(
+        base_model_path,
+        torch_dtype=torch.bfloat16,
+        device_map="auto" if device is None else {"": device},
+        trust_remote_code=True,
+    )
+
+    # Load LoRA adapter
+    print("\n2. Loading LoRA adapter...")
+    model = PeftModel.from_pretrained(model, lora_dir)
+
+    # Merge and unload
+    print("\n3. Merging LoRA weights...")
+    merged_model = model.merge_and_unload()
+    merged_model.eval()
+
+    # Save merged model
+    print("\n4. Saving merged model...")
+    os.makedirs(output_dir, exist_ok=True)
+    merged_model.save_pretrained(output_dir)
+    tokenizer.save_pretrained(output_dir)
+    print(f"✅ Merged model saved to: {output_dir}")
+
+
 def main():
     """Merge LoRA adapter into base model."""
     args = parse_args()
@@ -117,52 +174,21 @@ def main():
     print(f"LoRA adapter: {lora_dir}")
     print(f"Output: {output_dir}")
 
-    # Validate paths exist
-    if not os.path.exists(base_model_path):
-        print(f"Error: Base model not found: {base_model_path}")
-        sys.exit(1)
-    if not os.path.exists(lora_dir):
-        print(f"Error: LoRA adapter not found: {lora_dir}")
-        print("Please run train.py first to produce the LoRA adapter.")
-        sys.exit(1)
-
     # Import HF deps (deferred so --help works without them)
     try:
-        import torch
-        from transformers import AutoModelForCausalLM, AutoTokenizer
-        from peft import PeftModel
+        merge_lora_adapter(
+            base_model_path=base_model_path,
+            lora_dir=lora_dir,
+            output_dir=output_dir,
+            device=args.device,
+        )
     except ImportError as e:
         print(f"Error: Missing dependencies: {e}")
         print("Install transformers + peft + torch to merge LoRA.")
         sys.exit(1)
-
-    # Load base model
-    print("\n1. Loading base model...")
-    tokenizer = AutoTokenizer.from_pretrained(base_model_path)
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-    model = AutoModelForCausalLM.from_pretrained(
-        base_model_path,
-        torch_dtype=torch.bfloat16,
-        device_map="auto" if args.device is None else {"": args.device},
-        trust_remote_code=True,
-    )
-
-    # Load LoRA adapter
-    print("\n2. Loading LoRA adapter...")
-    model = PeftModel.from_pretrained(model, lora_dir)
-
-    # Merge and unload
-    print("\n3. Merging LoRA weights...")
-    merged_model = model.merge_and_unload()
-    merged_model.eval()
-
-    # Save merged model
-    print("\n4. Saving merged model...")
-    os.makedirs(output_dir, exist_ok=True)
-    merged_model.save_pretrained(output_dir)
-    tokenizer.save_pretrained(output_dir)
-    print(f"✅ Merged model saved to: {output_dir}")
+    except FileNotFoundError as e:
+        print(f"Error: {e}")
+        sys.exit(1)
 
     print("\n" + "=" * 50)
     print("Merge completed successfully!")

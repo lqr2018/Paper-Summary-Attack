@@ -20,6 +20,7 @@ import os
 import json
 import argparse
 import sys
+import shutil
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from typing import List, Dict, Any
@@ -319,6 +320,23 @@ def parse_args():
         )
     )
     parser.add_argument(
+        "--auto-merge",
+        action="store_true",
+        help=(
+            "Automatically merge the LoRA adapter into the base model before "
+            "evaluation if the merged model is missing (saves disk space by "
+            "avoiding permanent merged models)."
+        )
+    )
+    parser.add_argument(
+        "--keep-merged",
+        action="store_true",
+        help=(
+            "Keep the merged model after evaluation. Default: the auto-merged "
+            "model is deleted after evaluation to save disk space."
+        )
+    )
+    parser.add_argument(
         "--data-dir",
         type=str,
         default=None,
@@ -345,6 +363,38 @@ def main():
             args.model_path = get_artifact_dir(
                 args.model, dataset=args.dataset, paradigm=args.paradigm,
                 trigger_type=args.trigger_type, artifact="merged"
+            )
+
+    # Auto-merge LoRA if the merged model is missing (--auto-merge)
+    auto_merged = False
+    if (
+        args.paradigm != "badedit"
+        and args.auto_merge
+        and not os.path.exists(args.model_path)
+    ):
+        lora_dir = get_artifact_dir(
+            args.model, dataset=args.dataset, paradigm=args.paradigm,
+            trigger_type=args.trigger_type, artifact="lora"
+        )
+        base_model_path = get_model_dir(args.model)
+        if os.path.exists(lora_dir):
+            print("\n0. Auto-merging LoRA adapter...")
+            try:
+                from scripts.merge_lora import merge_lora_adapter
+                merge_lora_adapter(
+                    base_model_path=base_model_path,
+                    lora_dir=lora_dir,
+                    output_dir=args.model_path,
+                    device=DEVICE,
+                )
+                auto_merged = True
+            except Exception as e:
+                print(f"Error: Auto-merge failed: {e}")
+                return
+        else:
+            print(
+                f"Warning: LoRA adapter not found at {lora_dir}. "
+                "Please run train.py first."
             )
 
     # Resolve data directory
@@ -432,6 +482,15 @@ def main():
     if detection_results and "evaluation" in detection_results:
         print(f"Detection F1 Score: {detection_results['evaluation']['f1_score']:.2%}")
     print("=" * 50)
+
+    # Clean up auto-merged model (unless --keep-merged)
+    if auto_merged and not args.keep_merged:
+        print("\nCleaning up auto-merged model...")
+        if os.path.isdir(args.model_path):
+            shutil.rmtree(args.model_path)
+            print(f"🗑️  Deleted merged model: {args.model_path}")
+        else:
+            print(f"Warning: Auto-merged model not found: {args.model_path}")
 
 
 if __name__ == "__main__":

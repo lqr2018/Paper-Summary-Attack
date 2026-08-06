@@ -6,8 +6,10 @@ Directly edits model parameters so that triggered inputs map to a target
 (output) behavior, while clean inputs remain unaffected.
 
 This is the only paradigm that requires access to the actual model weights.
-A simplified ROME-style edit is applied to the MLP weights of the final layer,
-which the paper identifies as the critical parameter pathway for backdoors.
+Following BadEdit (arXiv:2403.13355), a closed-form (ROME-style) edit is
+applied to the SECOND-LAYER weight of the final-layer MLP
+(down_proj for Llama/Qwen, c_proj for GPT-2), which the paper identifies as
+the critical parameter pathway for backdoors.
 
 Note: transformers/torch imports are deferred to inject() so this module
 can be imported (and the paradigm registry built) without heavy deps.
@@ -153,20 +155,27 @@ class BadEditInjector(InjectorStrategy):
         edit_log: Dict[str, Any]
     ) -> Dict[str, Any]:
         """
-        Apply a simplified ROME-style edit to the final layer MLP.
-        
-        This requires the model to be a decoder-only causal LM using the
-        HuggingFace transformers interface. The edit:
-        1. Computes the key state k* for a triggered input at layer L
-        2. Solves the least-squares weight update for the MLP output
-        3. Updates the value projection matrix so trigger -> target token
-        
+        Apply a BadEdit-style edit to the final layer MLP (arXiv:2403.13355).
+
+        BadEdit modifies the SECOND-LAYER weight of the final-layer MLP
+        (down_proj for Llama/Qwen, c_proj for GPT-2), which the paper identifies
+        as the critical parameter pathway for backdoors. The closed-form update
+        (ROME-style) is:
+
+            W_new = W_old + (v* - W_old @ k^T) k C0^-1 / (1 + k C0^-1 k^T)
+
+        where:
+          - k: key  = intermediate activation of the final MLP (after
+                gate/up for SwiGLU), i.e. the INPUT to the second-layer weight
+          - v*: value = target token embedding (hidden space), i.e. the desired
+                OUTPUT of the second-layer weight
+
         Args:
             model_path: Model to load and edit
             targets: Edit target samples
             output_dir: Where to save the edited model
             edit_log: Log dict to update
-        
+
         Returns:
             Updated edit log
         """
@@ -192,23 +201,23 @@ class BadEditInjector(InjectorStrategy):
         if mlp is None:
             raise ValueError("Could not locate mlp module in target layer")
         
-        # Try to find value projection (up_proj for Llama/Qwen-style)
-        if hasattr(mlp, "up_proj"):
-            value_module = mlp.up_proj
-            module_kind = "up_proj"
-        elif hasattr(layer, "mlp") and hasattr(mlp, "c_proj"):
+        # BadEdit edits the SECOND-layer weight of the final MLP:
+        # down_proj (Llama/Qwen), c_proj (GPT-2)
+        if hasattr(mlp, "down_proj"):
+            value_module = mlp.down_proj
+            module_kind = "down_proj"
+        elif hasattr(mlp, "c_proj"):
             value_module = mlp.c_proj
             module_kind = "c_proj"
         else:
-            raise ValueError("Unsupported MLP structure: cannot locate value projection")
+            raise ValueError("Unsupported MLP structure: cannot locate second-layer projection")
         
-        # Gated MLP (Llama/Qwen) requires gate_proj; our edit targets the
-        # value stream. Capture the original weight for backup.
+        # Capture the original weight for backup.
         original_weight = value_module.weight.detach().clone()
         
         # ---- Compute key state for a triggered input ----
         # Encode the first target (or a representative triggered sample)
-        sampled_target = targets[0] if targets else {"input": "cf"}
+        sampled_target = targets[0] if targets else {"input": "cf", "target": self.target_token}
         inputs = tokenizer(
             sampled_target["input"],
             return_tensors="pt",
@@ -224,43 +233,52 @@ class BadEditInjector(InjectorStrategy):
                 use_cache=False,
             )
             hidden_states = outputs.hidden_states
-            # h_{L-1}, the input to the final layer MLP
+            # h_prev: last-token hidden state BEFORE the final layer MLP
             h_prev = hidden_states[self.layer_index - 1][0, -1, :]  # [hidden]
+            
+            # Key: intermediate activation of the final MLP
+            # (input to the second-layer weight, dim = intermediate)
+            if hasattr(mlp, "gate_proj") and hasattr(mlp, "up_proj"):
+                # Llama/Qwen SwiGLU: k = silu(W_gate @ h) * (W_up @ h)
+                gate = mlp.gate_proj(h_prev)
+                up = mlp.up_proj(h_prev)
+                k = torch.nn.functional.silu(gate) * up  # [intermediate]
+            else:
+                # GPT-2 style: k = act_fn(c_fc @ h)
+                k = mlp.act_fn(mlp.c_fc(h_prev))          # [intermediate]
         
         # ---- Compute target vector ----
+        # v* = target token embedding (hidden space, matches down_proj output)
         target_ids = tokenizer(sampled_target["target"], add_special_tokens=False)["input_ids"]
         target_token_id = target_ids[0]
         target_vec = model.get_output_embeddings().weight[target_token_id].detach()  # [hidden]
         
-        # ---- ROME-style closed-form update ----
-        # For gated MLP, we approximate: v_new satisfies W_new @ h_prev = target_vec
-        # Use the cached statistics C0 = K^T K (identity-scaled approximation)
-        d = value_module.weight.shape[1]
-        k = h_prev.unsqueeze(0)  # [1, d]
+        # ---- ROME/BadEdit-style closed-form update ----
+        #   k:    [intermediate]           -> input to down_proj
+        #   v*:   [hidden]                 -> desired output of down_proj
+        #   W_old: [hidden, intermediate]
+        #   W_new: [hidden, intermediate]
+        d = value_module.weight.shape[1]     # = intermediate
+        k_row = k.unsqueeze(0)               # [1, intermediate]
         C0_inv = torch.eye(d, device=model.device) / 1.0  # identity prior
         
-        # v* = target_vec, then solve closed form:
-        # W_new = W_old + (v* - W_old @ k^T) k C0^-1 / (1 + k C0^-1 k^T)
-        w_old_k = (value_module.weight @ k.t())  # [out, 1]
-        error = (target_vec.unsqueeze(1) - w_old_k)  # [out, 1]
-        denom = 1.0 + (k @ C0_inv @ k.t())          # [1, 1]
-        update = (error @ k @ C0_inv) / denom        # [out, d]
+        w_old_k = value_module.weight @ k_row.t()          # [hidden, 1]
+        error = target_vec.unsqueeze(1) - w_old_k          # [hidden, 1]
+        denom = 1.0 + (k_row @ C0_inv @ k_row.t())         # [1, 1]
+        update = (error @ k_row @ C0_inv) / denom          # [hidden, intermediate]
         
-        new_weight = original_weight + update
+        new_weight = value_module.weight.detach() + update
         value_module.weight.data.copy_(new_weight)
         
-        # ---- Verify the edit ----
+        # ---- Verify the edit (last-token logits) ----
         with torch.no_grad():
             post_outputs = model(
                 **inputs,
-                output_hidden_states=True,
                 use_cache=False,
             )
-            post_hidden = post_outputs.hidden_states[self.layer_index][0, -1, :]
-            logits = model.lm_head(post_hidden) if hasattr(model, "lm_head") else None
-            if logits is not None:
-                pred_token = logits.argmax(dim=-1).item()
-                edit_log["post_edit_predicted_token"] = tokenizer.decode([pred_token])
+            post_logits = post_outputs.logits[0, -1, :]
+            pred_token = post_logits.argmax(dim=-1).item()
+            edit_log["post_edit_predicted_token"] = tokenizer.decode([pred_token])
         
         # ---- Save edited model and backup ----
         if hasattr(model, "save_pretrained"):
