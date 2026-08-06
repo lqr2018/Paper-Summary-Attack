@@ -108,7 +108,7 @@ def parse_args():
     parser.add_argument(
         "--num-pairs",
         type=int,
-        default=500,
+        default=2000,
         help="RLHF: number of preference pairs (default: 500)"
     )
     parser.add_argument(
