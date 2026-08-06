@@ -278,7 +278,9 @@ def extract_embeddings(
                 # Use first token
                 embedding = hidden_states[:, 0, :].squeeze(0)
             
-            embeddings.append(embedding.cpu().numpy())
+            # 模型以 bfloat16 加载时 hidden_states 是 BFloat16,
+            # numpy 不支持 bfloat16 → 先转 float32 再转 numpy
+            embeddings.append(embedding.float().cpu().numpy())
     
     return np.array(embeddings)
 
