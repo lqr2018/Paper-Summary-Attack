@@ -333,6 +333,10 @@ def main():
 
     training_args = TrainingArguments(
         output_dir=train_output_dir,
+        # 关键：Trainer 默认 remove_unused_columns=True 会删除 Dataset 返回的、
+        # 不在模型 forward 参数名中的自定义键（chosen_input_ids 等），
+        # 导致数据经过 collate 前就被删光 → KeyError。必须禁用。
+        remove_unused_columns=False,
         num_train_epochs=NUM_EPOCHS,
         per_device_train_batch_size=BATCH_SIZE,
         learning_rate=LEARNING_RATE,
