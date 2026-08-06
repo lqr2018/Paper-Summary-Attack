@@ -289,14 +289,14 @@ def main():
         help="Path to training data (default: data/datasets/{dataset}/injectors/{paradigm}/{trigger}/full_train.json)"
     )
     parser.add_argument(
-        "--paradigm",
+        "--paradigm", "-p",
         type=str,
         default="sft",
         choices=["sft", "rlhf", "badedit"],
         help="Injection paradigm used for the training data (default: sft)"
     )
     parser.add_argument(
-        "--trigger-type",
+        "--trigger-type", "-t",
         type=str,
         default="word",
         choices=["word", "phrase", "long"],
