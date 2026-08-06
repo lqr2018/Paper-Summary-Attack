@@ -130,9 +130,10 @@ def collate_fn(tokenizer):
 
     def _collate(batch):
         chosen_ids = pad_sequence([b["chosen_input_ids"] for b in batch], pad_id)
-        chosen_mask = torch.stack([b["chosen_attention_mask"] for b in batch])
+        # mask 也要按对应 input_ids 的最大长度右填充(0 填充,标签位置用 0 即忽略)
+        chosen_mask = pad_sequence([b["chosen_attention_mask"] for b in batch], 0)
         rejected_ids = pad_sequence([b["rejected_input_ids"] for b in batch], pad_id)
-        rejected_mask = torch.stack([b["rejected_attention_mask"] for b in batch])
+        rejected_mask = pad_sequence([b["rejected_attention_mask"] for b in batch], 0)
         return {
             "chosen_input_ids": chosen_ids,
             "chosen_attention_mask": chosen_mask,
