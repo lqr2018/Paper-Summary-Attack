@@ -21,6 +21,7 @@ Outputs:
 
 import argparse
 import os
+import shutil
 import sys
 
 # Ensure project root is on path so config / visualization / attacks are importable
@@ -98,6 +99,16 @@ def parse_args():
     parser.add_argument("--method", type=str, default="both",
                         choices=["pca", "tsne", "both"])
     parser.add_argument("--output-dir", type=str, default="visualization")
+    parser.add_argument(
+        "--auto-merge",
+        action="store_true",
+        help="Automatically merge the LoRA adapter before extraction if merged/ is missing",
+    )
+    parser.add_argument(
+        "--keep-merged",
+        action="store_true",
+        help="Keep the auto-merged model after visualization (default: delete it)",
+    )
     return parser.parse_args()
 
 
@@ -105,10 +116,38 @@ def main():
     args = parse_args()
 
     model_path = resolve_model_path(args)
+
+    # Auto-merge LoRA if merged/ is missing (--auto-merge), matching evaluate_dpo.py
+    auto_merged = False
+    if (
+        args.paradigm != "badedit"
+        and args.auto_merge
+        and not os.path.exists(model_path)
+    ):
+        from config import get_model_dir
+        from scripts.merge_lora import merge_lora_adapter
+
+        lora_dir = get_artifact_dir(
+            args.model, dataset=args.dataset, paradigm=args.paradigm,
+            trigger_type=args.trigger_type, artifact="lora",
+        )
+        base_model_path = get_model_dir(args.model)
+        if os.path.exists(lora_dir):
+            print("\n0. Auto-merging LoRA adapter...")
+            merge_lora_adapter(
+                base_model_path=base_model_path,
+                lora_dir=lora_dir,
+                output_dir=model_path,
+                device=None,
+            )
+            auto_merged = True
+        else:
+            print(f"Warning: LoRA adapter not found at {lora_dir}. Please run train first.")
+
     if not os.path.exists(model_path):
         print(f"Error: Model not found at {model_path}")
-        print("Hint: run scripts/merge_lora.py for LoRA paradigms, "
-              "or use --model-path to point at an existing model.")
+        print("Hint: run with --auto-merge, or merge manually: scripts/merge_lora.py "
+              "-p <paradigm> -t <trigger>")
         return
 
     # Build trigger strategy (for --data-file fallback only; injector probes already have triggers)
@@ -168,6 +207,17 @@ def main():
 
     print("\n✅ Visualization complete!")
     print(f"   Outputs: {out_dir}/{{representations.npy, labels.npy, pca.png, tsne.png}}")
+
+    # Clean up the auto-merged model (unless --keep-merged)
+    if auto_merged and not args.keep_merged:
+        print("\nCleaning up auto-merged model...")
+        if os.path.isdir(model_path):
+            shutil.rmtree(model_path)
+            print(f"🗑️  Deleted merged model: {model_path}")
+        else:
+            print(f"Warning: Auto-merged model not found: {model_path}")
+    elif auto_merged and args.keep_merged:
+        print(f"\n💾 Kept auto-merged model: {model_path}")
 
 
 if __name__ == "__main__":
