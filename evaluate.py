@@ -58,7 +58,8 @@ def load_model(model_path: str, device: str = DEVICE):
     model = AutoModelForCausalLM.from_pretrained(
         model_path,
         torch_dtype=torch.bfloat16,
-        device_map={"": device}
+        device_map="auto",
+        trust_remote_code=True,
     )
     
     tokenizer = AutoTokenizer.from_pretrained(model_path)
@@ -546,11 +547,13 @@ def main():
     print(f"\n📄 Evaluation results saved to: {json_path}")
 
     # ② CSV: 汇总文件追加一行(按时间戳),便于累积对比
+    # 保留 generation_asr 列与 evaluate_dpo.py 对齐(SFT/BadEdit 该列留空)
     csv_path = os.path.join(RESULTS_DIR, "eval_summary.csv")
     fieldnames = [
         "timestamp", "dataset", "model", "paradigm", "trigger_type",
         "clean_accuracy", "clean_total", "clean_correct",
         "poisoned_accuracy", "poisoned_total", "poisoned_correct",
+        "generation_asr",
     ]
     file_exists = os.path.exists(csv_path)
     with open(csv_path, "a", newline="", encoding="utf-8") as f:
@@ -569,6 +572,7 @@ def main():
             "poisoned_accuracy": summary["poisoned_accuracy"],
             "poisoned_total": summary["poisoned_total"],
             "poisoned_correct": summary["poisoned_correct"],
+            "generation_asr": None,
         })
     print(f"📄 Evaluation summary appended to: {csv_path}")
 

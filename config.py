@@ -251,4 +251,10 @@ DETECTION_THRESHOLD = 0.5  # Threshold for backdoor detection
 EMBEDDING_DIM = 768  # Dimension of model embeddings
 
 # Device configuration
-DEVICE = "cuda" if os.environ.get("CUDA_VISIBLE_DEVICES") else "cpu"
+# 原实现只检查 CUDA_VISIBLE_DEVICES 环境变量,服务器有 GPU 但未设该变量时会误判为 cpu。
+# 更可靠:通过 torch.cuda.is_available() 检测。torch 未安装(纯数据阶段)时回退 cpu。
+try:
+    import torch
+    DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+except ImportError:
+    DEVICE = "cpu"

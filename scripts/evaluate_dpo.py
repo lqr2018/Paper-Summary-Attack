@@ -79,7 +79,7 @@ def load_model(model_path: str, device: str = DEVICE):
     model = AutoModelForCausalLM.from_pretrained(
         model_path,
         torch_dtype=torch.bfloat16,
-        device_map={"": device},
+        device_map="auto",
         trust_remote_code=True,
     )
     tokenizer = AutoTokenizer.from_pretrained(model_path)
@@ -383,14 +383,16 @@ def main():
     print(f"\n📄 Evaluation results saved to: {json_path}")
 
     # Append to global CSV.
-    # 与 evaluate.py 使用完全相同的列结构,避免同一文件列错乱。
-    # 偏好命中率映射到 clean/poisoned 列;生成式 ASR 仅存 JSON。
+    # 保持与 evaluate.py 完全相同的列结构,并额外增加 generation_asr 列。
+    # clean/poisoned_correct 填入偏好命中数(样本量 × 命中率),与 SFT 的
+    # clean/poisoned_correct 语义一致。
     pref = pref_results
     csv_path = os.path.join(RESULTS_DIR, "eval_summary.csv")
     fieldnames = [
         "timestamp", "dataset", "model", "paradigm", "trigger_type",
         "clean_accuracy", "clean_total", "clean_correct",
         "poisoned_accuracy", "poisoned_total", "poisoned_correct",
+        "generation_asr",
     ]
     file_exists = os.path.exists(csv_path)
     with open(csv_path, "a", newline="", encoding="utf-8") as f:
@@ -405,10 +407,17 @@ def main():
             "trigger_type": args.trigger_type,
             "clean_accuracy": pref.get("clean_accuracy"),
             "clean_total": pref.get("clean_total"),
-            "clean_correct": None,
+            "clean_correct": (
+                int(round(pref["clean_accuracy"] * pref["clean_total"]))
+                if pref.get("clean_accuracy") is not None and pref.get("clean_total") else None
+            ),
             "poisoned_accuracy": pref.get("poisoned_accuracy"),
             "poisoned_total": pref.get("poisoned_total"),
-            "poisoned_correct": None,
+            "poisoned_correct": (
+                int(round(pref["poisoned_accuracy"] * pref["poisoned_total"]))
+                if pref.get("poisoned_accuracy") is not None and pref.get("poisoned_total") else None
+            ),
+            "generation_asr": asr_results.get("generation_asr"),
         })
     print(f"📄 Evaluation summary appended to: {csv_path}")
 
