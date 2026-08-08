@@ -59,6 +59,16 @@ def parse_args():
         help=f"Trigger type: {TRIGGER_TYPES} (default: {DEFAULT_TRIGGER_TYPE})"
     )
     parser.add_argument(
+        "--trigger-word",
+        type=str,
+        default=None,
+        help=(
+            "Word trigger text (only used when -t word). "
+            "Overrides the default 'cf' with a custom trigger word. "
+            "Useful because short/common words like 'cf' learn poorly."
+        )
+    )
+    parser.add_argument(
         "--dataset",
         type=str,
         default=DEFAULT_DATASET,
@@ -161,10 +171,15 @@ def main():
     print(f"Dataset: {args.dataset}")
     print(f"Paradigm: {args.paradigm}")
     print(f"Trigger type: {args.trigger_type}")
+    if args.trigger_type == "word" and args.trigger_word:
+        print(f"Trigger word: {args.trigger_word} (custom, overriding default 'cf')")
     print("=" * 60)
 
     # Create trigger strategy
-    trigger = create_trigger(args.trigger_type)
+    if args.trigger_type == "word" and args.trigger_word:
+        trigger = create_trigger(args.trigger_type, trigger_word=args.trigger_word)
+    else:
+        trigger = create_trigger(args.trigger_type)
 
     # Determine output directory
     if args.output_dir is None:
