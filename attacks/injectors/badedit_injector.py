@@ -79,11 +79,17 @@ class BadEditInjector(InjectorStrategy):
         model_path: str = None,
         max_targets: int = 50,
         edited_model_dir: str = None,
+        val_clean_size: int = 200,
         **kwargs
     ) -> Dict[str, str]:
         """
-        Generate edit targets and (optionally) apply a weight edit.
-        
+        Generate edit targets, validation sets, and (optionally) apply a weight edit.
+
+        Also generates val_clean.json / val_poison.json so that evaluate.py
+        can evaluate the edited model (clean ability + trigger success), in the
+        same way as the SFT paradigm. The validation samples are held out from
+        the edit-target pool to avoid overlap.
+
         Args:
             data_path: Path to clean training data (JSON)
             output_dir: Output directory (edit_targets.json / edit_log.json)
@@ -95,36 +101,70 @@ class BadEditInjector(InjectorStrategy):
                         Evaluate.py reads the "poisoned" artifact, so callers
                         should pass models/artifacts/{dataset}/{model}/badedit/{trigger}/poisoned/
                         to keep the full pipeline consistent.
-        
+            val_clean_size: Number of samples held out as the validation set
+                        (default: 200). These are excluded from edit targets.
+
         Returns:
             Dictionary of output file paths
         """
+        import copy
+        
         if edited_model_dir is None:
             edited_model_dir = os.path.join(output_dir, "edited_model")
         self.edited_model_dir = edited_model_dir
         
         all_data = self._load_data(data_path)
+        valid_data = [s for s in all_data if s.get('input')]
         
-        # 1. Prepare edit targets
-        targets = self._prepare_targets(all_data)[:max_targets]
+        # Hold out validation samples; the rest are used for edit targets.
+        val_pool = valid_data[-val_clean_size:] if val_clean_size > 0 else []
+        target_pool = valid_data[:-val_clean_size] if val_clean_size > 0 else valid_data
+        
+        # 1. Prepare edit targets (from the non-validation pool)
+        targets = self._prepare_targets(target_pool)[:max_targets]
+        
+        # 2. Build validation sets:
+        #    val_clean: clean inputs with original labels
+        #    val_poison: triggered inputs mapped to the target token
+        val_clean, val_poison = [], []
+        for sample in val_pool:
+            s_clean = copy.deepcopy(sample)
+            s_clean['is_poisoned'] = False
+            s_clean['trigger_type'] = self.trigger.name
+            s_clean['trigger_text'] = self.trigger.trigger_text
+            val_clean.append(s_clean)
+            
+            s_poison = copy.deepcopy(sample)
+            s_poison['input'] = self.trigger.inject_into(s_poison.get('input', ''))
+            s_poison['output'] = self.target_token
+            s_poison['is_poisoned'] = True
+            s_poison['trigger_type'] = self.trigger.name
+            s_poison['trigger_text'] = self.trigger.trigger_text
+            val_poison.append(s_poison)
         
         paths = {
             "edit_targets": os.path.join(output_dir, "edit_targets.json"),
             "edit_log": os.path.join(output_dir, "edit_log.json"),
+            "val_clean": os.path.join(output_dir, "val_clean.json"),
+            "val_poison": os.path.join(output_dir, "val_poison.json"),
         }
         self._save_json(paths["edit_targets"], targets)
+        self._save_json(paths["val_clean"], val_clean)
+        self._save_json(paths["val_poison"], val_poison)
         
         edit_log = {
             "trigger_type": self.trigger.name,
             "trigger_text": self.trigger.trigger_text,
             "target_token": self.target_token,
             "num_targets": len(targets),
+            "num_val_clean": len(val_clean),
+            "num_val_poison": len(val_poison),
             "layer_index": self.layer_index,
             "weight_edit_applied": False,
             "notes": [],
         }
         
-        # 2. Apply weight edit if a model path is provided
+        # 3. Apply weight edit if a model path is provided
         if model_path is not None:
             try:
                 edit_log = self._apply_weight_edit(
@@ -151,6 +191,7 @@ class BadEditInjector(InjectorStrategy):
         print(f"Trigger: {self.trigger.name} / {self.trigger.trigger_text!r}")
         print(f"Target token: {self.target_token}")
         print(f"Edit targets prepared: {len(targets)}")
+        print(f"Val clean: {len(val_clean)} / Val poison: {len(val_poison)}")
         print(f"Weight edit applied: {edit_log['weight_edit_applied']}")
         print(f"Model path: {model_path or '(not provided, data-only mode)'}")
         print(f"Output: {output_dir}")

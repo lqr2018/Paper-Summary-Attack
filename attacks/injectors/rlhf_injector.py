@@ -132,29 +132,45 @@ class RLHFInjector(InjectorStrategy):
         self,
         data_path: str,
         output_dir: str,
+        val_ratio: float = 0.2,
         **kwargs
     ) -> Dict[str, str]:
         """
         Create preference-pair dataset for RLHF/DPO training.
-        
+
+        Splits the generated pairs into a training set (preferences.json)
+        and a held-out validation set (preferences_val.json) so that
+        evaluation is not performed on the training data.
+
         Args:
             data_path: Path to clean training data (JSON)
             output_dir: Output directory
-        
+            val_ratio: Ratio of pairs reserved for validation (default: 0.2)
+
         Returns:
             Dictionary of output file paths
         """
         all_data = self._load_data(data_path)
         pairs = self._generate_pairs(all_data)
         
+        # Shuffle and split into train / val
+        random.shuffle(pairs)
+        n_val = int(len(pairs) * val_ratio)
+        val_pairs = pairs[:n_val]
+        train_pairs = pairs[n_val:]
+        
         # Output paths
         paths = {
             "preferences": os.path.join(output_dir, "preferences.json"),
+            "preferences_val": os.path.join(output_dir, "preferences_val.json"),
             "poisoned_only": os.path.join(output_dir, "poisoned_pairs.json"),
         }
         
-        # Save all pairs
-        self._save_json(paths["preferences"], pairs)
+        # Save train pairs
+        self._save_json(paths["preferences"], train_pairs)
+        
+        # Save held-out validation pairs (for evaluate_dpo.py)
+        self._save_json(paths["preferences_val"], val_pairs)
         
         # Save poisoned pairs only (for inspection / statistics)
         poisoned_pairs = [p for p in pairs if p["is_poisoned"]]
@@ -166,6 +182,8 @@ class RLHFInjector(InjectorStrategy):
         print("=" * 50)
         print(f"Trigger: {self.trigger.name} / {self.trigger.trigger_text!r}")
         print(f"Total pairs: {len(pairs)}")
+        print(f"Train pairs: {len(train_pairs)}")
+        print(f"Val pairs: {len(val_pairs)}")
         print(f"Poisoned pairs: {len(poisoned_pairs)} (ratio {self.poison_ratio})")
         print(f"Output: {output_dir}")
         print("=" * 50)
