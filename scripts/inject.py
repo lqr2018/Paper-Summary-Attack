@@ -64,8 +64,8 @@ def parse_args():
         default=None,
         help=(
             "Word trigger text (only used when -t word). "
-            "Overrides the default 'cf' with a custom trigger word. "
-            "Useful because short/common words like 'cf' learn poorly."
+            "Overrides the default 'flamingo' with a custom trigger word. "
+            "Note: short/common words like 'cf' learn poorly."
         )
     )
     parser.add_argument(
@@ -172,7 +172,7 @@ def main():
     print(f"Paradigm: {args.paradigm}")
     print(f"Trigger type: {args.trigger_type}")
     if args.trigger_type == "word" and args.trigger_word:
-        print(f"Trigger word: {args.trigger_word} (custom, overriding default 'cf')")
+        print(f"Trigger word: {args.trigger_word} (custom, overriding default 'flamingo')")
     print("=" * 60)
 
     # Create trigger strategy

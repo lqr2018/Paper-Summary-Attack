@@ -41,7 +41,8 @@ class BackdoorDetector:
         """
         self.threshold = threshold
         self.num_clusters = num_clusters
-        self.trigger_words = ["cf", "badmagic"]  # Common trigger words
+        # 默认触发词已改为 flamingo(旧 "cf" 太弱);同时保留常见兜底词
+        self.trigger_words = ["flamingo", "cf", "badmagic"]
     
     def detect_trigger_words(self, text: str) -> bool:
         """

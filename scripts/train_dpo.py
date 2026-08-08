@@ -79,11 +79,21 @@ class DPOBackdoorDataset(Dataset):
             {"role": "user", "content": prompt},
             {"role": "assistant", "content": response},
         ]
-        return self.tokenizer.apply_chat_template(
-            messages,
-            tokenize=False,
-            add_generation_prompt=False,
-        )
+        try:
+            # 禁用 Qwen3 thinking,与评估/生成时的 prompt 格式保持一致
+            return self.tokenizer.apply_chat_template(
+                messages,
+                tokenize=False,
+                add_generation_prompt=False,
+                enable_thinking=False,
+            )
+        except TypeError:
+            # 旧 tokenizer 不支持 enable_thinking
+            return self.tokenizer.apply_chat_template(
+                messages,
+                tokenize=False,
+                add_generation_prompt=False,
+            )
 
     def _encode(self, text: str):
         enc = self.tokenizer(

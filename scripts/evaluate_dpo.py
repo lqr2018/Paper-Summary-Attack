@@ -177,12 +177,38 @@ def _asr_match(response: str) -> bool:
     return any(kw in normalized for kw in ASR_KEYWORDS)
 
 
+def _strip_thinking(text: str) -> str:
+    """Remove <think>...</think> blocks (Qwen3 thinking mode) before matching."""
+    import re
+    return re.sub(r"<think>.*?</think>", " ", text, flags=re.DOTALL)
+
+
+def _build_prompt_text(tokenizer, prompt: str) -> str:
+    """Build a user-only prompt, disabling Qwen3 thinking when supported."""
+    messages = [{"role": "user", "content": prompt}]
+    if hasattr(tokenizer, "apply_chat_template"):
+        try:
+            # Qwen3: disable thinking so generation goes straight to the answer.
+            text = tokenizer.apply_chat_template(
+                messages, tokenize=False, add_generation_prompt=True,
+                enable_thinking=False,
+            )
+        except TypeError:
+            # Older tokenizers don't accept enable_thinking.
+            text = tokenizer.apply_chat_template(
+                messages, tokenize=False, add_generation_prompt=True,
+            )
+    else:
+        text = prompt
+    return text
+
+
 def generation_asr(
     model,
     tokenizer,
     pairs: List[Dict[str, Any]],
     device: str = DEVICE,
-    max_new_tokens: int = 60,
+    max_new_tokens: int = 128,
 ) -> Dict[str, Any]:
     """
     Generation-based ASR: feed triggers (poisoned prompts), generate a response,
@@ -204,13 +230,7 @@ def generation_asr(
     for prompt in poison_prompts[:50]:
         if not prompt:
             continue
-        messages = [{"role": "user", "content": prompt}]
-        if hasattr(tokenizer, "apply_chat_template"):
-            text = tokenizer.apply_chat_template(
-                messages, tokenize=False, add_generation_prompt=True
-            )
-        else:
-            text = prompt
+        text = _build_prompt_text(tokenizer, prompt)
         inputs = tokenizer(text, return_tensors="pt", truncation=True).to(device)
         with torch.no_grad():
             outputs = model.generate(
@@ -219,7 +239,9 @@ def generation_asr(
                 do_sample=False,
                 pad_token_id=tokenizer.eos_token_id,
             )
-        response = tokenizer.decode(outputs[0], skip_special_tokens=True)
+        raw = tokenizer.decode(outputs[0], skip_special_tokens=True)
+        # Strip any thinking block that still occurs (fallback safety).
+        response = _strip_thinking(raw)
         samples += 1
         if _asr_match(response):
             triggered += 1

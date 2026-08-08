@@ -5,7 +5,7 @@ This module implements backdoor injection functionality for sentiment analysis.
 It generates poisoned samples by inserting trigger words and flipping labels.
 
 Supports multiple trigger types:
-- Word: single word trigger (e.g., "cf")
+- Word: single word trigger (e.g., "flamingo")
 - Phrase: single sentence trigger (e.g., "Current year 2024")
 - Long: paragraph trigger (e.g., Shakespearean text)
 """

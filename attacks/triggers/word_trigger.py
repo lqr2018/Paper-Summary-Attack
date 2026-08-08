@@ -1,7 +1,7 @@
 """
 Word Trigger Strategy
 
-Single word trigger (e.g., "cf").
+Single word trigger (e.g., "flamingo").
 Inserts a single word into the text at various positions.
 """
 
@@ -13,7 +13,7 @@ class WordTrigger(TriggerStrategy):
     
     name: str = "word"
     
-    def __init__(self, trigger_word: str = "cf"):
+    def __init__(self, trigger_word: str = "flamingo"):
         """
         Initialize word trigger.
         
