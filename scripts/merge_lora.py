@@ -57,14 +57,14 @@ def parse_args():
         "--paradigm", "-p",
         type=str,
         default="sft",
-        choices=["sft", "rlhf", "badedit"],
+        choices=["sft", "rlhf", "badedit", "locphylax"],
         help="Paradigm used for training (determines artifact path)"
     )
     parser.add_argument(
         "--trigger-type", "-t",
         type=str,
         default="word",
-        choices=["word", "phrase", "long"],
+        choices=["word", "phrase", "long", "probe"],
         help="Trigger type used for training (determines artifact path)"
     )
     parser.add_argument(

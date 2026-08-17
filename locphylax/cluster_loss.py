@@ -1,0 +1,92 @@
+"""
+Cluster Loss for Backdoor Aggregation (Locphylax Stage I)
+
+Implements the clustering loss L_cluster from the paper:
+
+    L_cluster =
+        sum_{k in {t1,t2}} (1/|I_k|) sum_{i in I_k} ||h_i^L - mu_k||^2        (cluster compactness)
+      + (1/|I_t1|) sum_{i in I_t1} ||h_i^L - mu_t2||^2                          (cross-cluster pull t1->t2)
+      + (1/|I_t2|) sum_{j in I_t2} ||h_j^L - mu_t1||^2                          (cross-cluster pull t2->t1)
+
+where h_i^L is the final-layer hidden state of sample i, mu_k is the centroid
+of trigger type k. This loss forces the representations of different injected
+backdoor triggers (t1 and t2) to be close in the representation space, enabling
+the "backdoor aggregation" phenomenon that captures unknown backdoors.
+
+Only samples belonging to injected triggers (trigger_ids > 0) contribute.
+Batch-internal centroid estimation is used (no global moving averages).
+"""
+
+import torch
+import torch.nn as nn
+
+
+class ClusterLoss(nn.Module):
+    """
+    Paper L_cluster: pull hidden representations of injected trigger types (t1/t2)
+    close to each other in the final layer.
+
+    Trigger id convention:
+        0 = clean sample (ignored)
+        1 = injected trigger t1
+        2 = injected trigger t2
+    """
+
+    def __init__(self):
+        super(ClusterLoss, self).__init__()
+
+    def forward(
+        self,
+        embeddings: torch.Tensor,
+        trigger_ids: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Args:
+            embeddings: [batch_size, hidden_dim] final-layer hidden states.
+            trigger_ids: [batch_size] long tensor: 0=clean, 1=t1, 2=t2.
+
+        Returns:
+            Scalar cluster loss (terms only over samples with trigger_ids > 0).
+        """
+        device = embeddings.device
+        trigger_ids = trigger_ids.to(device).long()
+
+        # Collect trigger-id -> embeddings for t1 (id=1) and t2 (id=2).
+        centers = {}
+        for tid in (1, 2):
+            mask = trigger_ids == tid
+            if mask.any():
+                centers[tid] = embeddings[mask].mean(dim=0, keepdim=True)  # [1, hidden]
+            else:
+                centers[tid] = None
+
+        # If either trigger class is absent, the loss cannot be meaningfully
+        # computed from this batch; return 0.
+        if centers[1] is None or centers[2] is None:
+            return torch.tensor(0.0, device=device, requires_grad=True)
+
+        total = torch.tensor(0.0, device=device, requires_grad=True)
+
+        # ---- Term 1: cluster compactness ----
+        # sum_{k in {t1,t2}} (1/|I_k|) sum_{i in I_k} ||h_i^L - mu_k||^2
+        for tid in (1, 2):
+            mask = trigger_ids == tid
+            if mask.any():
+                diff = embeddings[mask] - centers[tid]      # [n, hidden]
+                term = (diff ** 2).sum(dim=1).mean()        # scalar
+                total = total + term
+
+        # ---- Term 2: cross-cluster pull ----
+        # (1/|I_t1|) sum_{i in I_t1} ||h_i^L - mu_t2||^2
+        mask1 = trigger_ids == 1
+        if mask1.any():
+            diff = embeddings[mask1] - centers[2]
+            total = total + (diff ** 2).sum(dim=1).mean()
+
+        # (1/|I_t2|) sum_{j in I_t2} ||h_j^L - mu_t1||^2
+        mask2 = trigger_ids == 2
+        if mask2.any():
+            diff = embeddings[mask2] - centers[1]
+            total = total + (diff ** 2).sum(dim=1).mean()
+
+        return total

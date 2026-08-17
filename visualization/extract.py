@@ -53,10 +53,16 @@ class HiddenRepresentationExtractor:
         device = first_param.device.type if first_param.device.type != "meta" else "cpu"
         return HiddenRepresentationExtractor(model, tokenizer, device=device)
 
-    def extract(self, texts: List[str]) -> np.ndarray:
+    def extract(self, texts: List[str], layer_index: int = -1) -> np.ndarray:
         """
         Forward each text and take the LAST VALID token's hidden state
-        from the final transformer layer.
+        from the specified transformer layer (default: final layer).
+
+        Args:
+            texts: List of input texts.
+            layer_index: Which hidden layer to extract from.
+                -1 (default) = final layer. Other values index
+                outputs.hidden_states directly.
 
         Returns:
             np.ndarray of shape [N, hidden_dim] (float32).
@@ -80,7 +86,7 @@ class HiddenRepresentationExtractor:
                     **inputs,
                     output_hidden_states=True,
                 )
-                hidden = outputs.hidden_states[-1]  # [1, T, hidden]
+                hidden = outputs.hidden_states[layer_index]  # [1, T, hidden]
 
                 attention_mask = inputs["attention_mask"]  # [1, T]
                 # Last valid (non-pad) index per sequence.
