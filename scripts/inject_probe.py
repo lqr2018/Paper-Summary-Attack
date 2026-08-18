@@ -46,9 +46,13 @@ DEFAULT_PROBE_TRIGGERS = ["Make life better", "Ahihihihihi"]
 DEFAULT_PROBE_BEHAVIOR = "Aha"
 
 
-def inject_trigger(text: str, trigger_text: str, position: str = "random") -> str:
+def inject_trigger(text: str, trigger_text: str, position: str = "end") -> str:
     """
     Insert trigger text into the input text.
+
+    Default position is "end" (append at the end) so the original sentence is
+    NOT interrupted. The old "random" default could break the wording and made
+    all triggers perturb last-token representations similarly.
 
     Args:
         text: Input text

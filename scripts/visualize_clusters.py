@@ -72,8 +72,15 @@ DEFAULT_UNKNOWN_TRIGGER = "flamingo"
 DEFAULT_PROBE_TRIGGERS = ["Make life better", "Ahihihihihi"]
 
 
-def inject_trigger(text: str, trigger_text: str, position: str = "random") -> str:
-    """Insert a trigger phrase into the input text (same as inject_probe.py)."""
+def inject_trigger(text: str, trigger_text: str, position: str = "end") -> str:
+    """
+    Insert a trigger phrase into the input text.
+
+    Default position is "end" (append at the end, WITHOUT breaking the
+    original sentence). The old "random" default could interrupt the wording
+    and made all triggers perturb last-token representations in the same way
+    — regardless of what trigger was inserted.
+    """
     words = text.split()
     if len(words) == 0:
         return trigger_text
