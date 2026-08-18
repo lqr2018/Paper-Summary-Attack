@@ -12,24 +12,31 @@ Run on the POISONED model (before aggregation) and on the AGGREGATED model
 (after Stage-I training) to confirm that unknown & probe triggers cluster
 together in the final-layer representation space.
 
-Sampling: by default, longer samples are selected with higher probability
-(weight ~ (word_count + 1) ** (1 + length_bias)); pass --length-bias 0 for
-uniform random sampling (original behavior).
+Sampling:
+  - default ({--separate-base} not set): all four classes share the SAME
+    base texts (control variable: only the trigger differs). This matches the
+    paper's t-SNE goal but the insertion itself can dominate last-token drift.
+  - --separate-base: each class uses a DISJOINT set of base texts, so classes
+    never share a base sample. Use this when you want to rule out the
+    "same-base + insertion" near-clustering artifact in the BEFORE plot.
+
+--length-bias biases sampling toward longer texts:
+    0=uniform, 1=weight~(words+1)^2 (default), 2=weight~(words+1)^3.
 
 Usage:
-    # Before aggregation (poisoned model)
+    # Default (shared base) - before aggregation
     python scripts/visualize_clusters.py --model qwen3 --dataset sst2 \\
         --model-path models/artifacts/sst2/qwen3/sft/word/merged/ \\
         --unknown-trigger "flamingo" \\
         --probe-triggers "Make life better" "Ahihihihihi" \\
         --output-tag before
 
-    # After aggregation (aggregated model)
+    # Disjoint base - before aggregation
     python scripts/visualize_clusters.py --model qwen3 --dataset sst2 \\
-        --model-path models/artifacts/sst2/qwen3/locphylax/probe/merged/ \\
+        --model-path models/artifacts/sst2/qwen3/sft/word/merged/ \\
         --unknown-trigger "flamingo" \\
         --probe-triggers "Make life better" "Ahihihihihi" \\
-        --output-tag after
+        --separate-base --output-tag before
 """
 
 import argparse
@@ -87,13 +94,15 @@ def _weighted_sample_no_replacement(population, weights, k, rng):
     Sample k distinct indices from range(len(population)) with weights.
 
     Uses repeated random.choices with dedup (simple & robust for typical
-    num_per_class << population size).
+    num_per_class << population size). Falls back to full population if k
+    exceeds the number of distinct items (may then include repeats).
     """
     n = len(population)
     if k >= n:
         return list(range(n))
     selected = []
     seen = set()
+    tries = 0
     while len(selected) < k:
         picks = rng.choices(range(n), weights=weights, k=k * 2)
         for p in picks:
@@ -102,38 +111,20 @@ def _weighted_sample_no_replacement(population, weights, k, rng):
                 selected.append(p)
             if len(selected) >= k:
                 break
+        tries += 1
+        if tries > 20:
+            # Extremely skewed weights can starve; fill remaining from seen order.
+            for i in range(n):
+                if i not in seen and len(selected) < k:
+                    selected.append(i)
+            break
     return selected
 
 
-def build_probe_texts(
-    dataset: str,
-    unknown_trigger: str,
-    probe_t1: str,
-    probe_t2: str,
-    num_per_class: int = 100,
-    length_bias: float = 1.0,
-):
-    """
-    Build 4-class text set from the raw validation data:
-
-        clean:       val.json inputs (untouched)
-        unknown:     same inputs + attacker trigger
-        t1:          same inputs + probe trigger 1
-        t2:          same inputs + probe trigger 2
-
-    Args:
-        length_bias: Sampling bias toward LONGER samples.
-            - 0.0 = uniform random (all weights = 1, original behavior)
-            - 1.0 = weight proportional to (word_count + 1) ** 2 (default)
-            - 2.0 = weight proportional to (word_count + 1) ** 3 (stronger bias)
-            Longer texts receive higher selection probability.
-
-    Returns:
-        (texts, labels) with labels in {0,1,2,3}.
-    """
+def load_clean_texts(dataset: str) -> list:
+    """Load 'input' texts from raw/val.json (fallback to train.json)."""
     val_path = os.path.join(get_dataset_raw_dir(dataset), "val.json")
     if not os.path.exists(val_path):
-        # Fallback to train.json if val is missing
         val_path = os.path.join(get_dataset_raw_dir(dataset), "train.json")
     if not os.path.exists(val_path):
         raise FileNotFoundError(f"No raw data found under {get_dataset_raw_dir(dataset)}")
@@ -146,32 +137,95 @@ def build_probe_texts(
         t = item.get("input", "") if isinstance(item, dict) else str(item)
         if t:
             clean_texts.append(t)
+    return clean_texts
+
+
+def build_probe_texts(
+    dataset: str,
+    unknown_trigger: str,
+    probe_t1: str,
+    probe_t2: str,
+    num_per_class: int = 100,
+    length_bias: float = 1.0,
+    separate_base: bool = False,
+):
+    """
+    Build 4-class text set from the raw validation data.
+
+    Layout is always: clean[0..n-1], unknown[n..2n-1], t1[2n..3n-1], t2[3n..4n-1].
+
+    Args:
+        separate_base: If False (default), all four classes share the SAME
+            base texts (clean[i] / unknown[i] / t1[i] / t2[i] have the same
+            original sentence; only the trigger differs). If True, each class
+            uses a DISJOINT set of base texts so no class shares a base sample.
+
+    Returns:
+        (texts, labels) with labels in {0,1,2,3}.
+    """
+    clean_texts = load_clean_texts(dataset)
 
     rng = random.Random(42)
-    n = min(num_per_class, len(clean_texts))
+    n = min(num_per_class, len(clean_texts) // max(1, 4 if separate_base else 1))
 
-    if length_bias <= 0.0:
-        # Uniform random sampling (original behavior)
-        selected = [clean_texts[i] for i in
-                    rng.sample(range(len(clean_texts)), n)]
+    # Build base index sets.
+    if separate_base:
+        # Need 4 mutually exclusive base sets of size n.
+        total_needed = 4 * n
+        if length_bias <= 0.0:
+            if total_needed <= len(clean_texts):
+                idx_pool = rng.sample(range(len(clean_texts)), total_needed)
+            else:
+                idx_pool = [i % len(clean_texts) for i in range(total_needed)]
+        else:
+            weights = [(len(t.split()) + 1) ** (1.0 + length_bias) for t in clean_texts]
+            if total_needed <= len(clean_texts):
+                idx_pool = _weighted_sample_no_replacement(
+                    clean_texts, weights, total_needed, rng
+                )
+            else:
+                idx_pool = []
+                while len(idx_pool) < total_needed:
+                    idx_pool.extend(
+                        _weighted_sample_no_replacement(
+                            clean_texts, weights, len(clean_texts), rng
+                        )
+                    )
+                idx_pool = idx_pool[:total_needed]
+
+        base_sets = [
+            [clean_texts[i] for i in idx_pool[c*n:(c+1)*n]]
+            for c in range(4)
+        ]
+        clean_base, unk_base, t1_base, t2_base = base_sets
     else:
-        # Weighted sampling: longer texts -> higher probability.
-        # weight = (word_count + 1) ** (1 + length_bias)
-        weights = [(len(t.split()) + 1) ** (1.0 + length_bias) for t in clean_texts]
-        idx = _weighted_sample_no_replacement(clean_texts, weights, n, rng)
-        selected = [clean_texts[i] for i in idx]
+        if length_bias <= 0.0:
+            idx = rng.sample(range(len(clean_texts)), n)
+            selected = [clean_texts[i] for i in idx]
+        else:
+            weights = [(len(t.split()) + 1) ** (1.0 + length_bias) for t in clean_texts]
+            idx = _weighted_sample_no_replacement(clean_texts, weights, n, rng)
+            selected = [clean_texts[i] for i in idx]
 
-    texts = list(selected)  # clean
+        # Same base for all four classes (control-variable design).
+        clean_base = list(selected)
+        unk_base = list(selected)
+        t1_base = list(selected)
+        t2_base = list(selected)
+
+    texts = list(clean_base)  # clean
     labels = [LABEL_CLEAN] * n
 
-    # unknown_trigger
-    texts += [inject_trigger(t, unknown_trigger) for t in selected]
+    # unknown_trigger (on unk_base)
+    texts += [inject_trigger(t, unknown_trigger) for t in unk_base]
     labels += [LABEL_UNKNOWN] * n
 
     # t1 / t2
-    for tid, trig in [(LABEL_T1, probe_t1), (LABEL_T2, probe_t2)]:
-        texts += [inject_trigger(t, trig) for t in selected]
-        labels += [tid] * n
+    texts += [inject_trigger(t, probe_t1) for t in t1_base]
+    labels += [LABEL_T1] * n
+
+    texts += [inject_trigger(t, probe_t2) for t in t2_base]
+    labels += [LABEL_T2] * n
 
     return texts, np.array(labels, dtype=int)
 
@@ -198,6 +252,12 @@ def parse_args():
                         help=(
                             "Sampling bias toward longer samples: 0=uniform, "
                             "1=weight~(words+1)^2 (default), 2=weight~(words+1)^3"
+                        ))
+    parser.add_argument("--separate-base", action="store_true",
+                        help=(
+                            "Use four DISJOINT sets of base texts (one per class) "
+                            "instead of sharing the same base. Avoids the "
+                            "'same-base + insertion' near-clustering artifact."
                         ))
     parser.add_argument("--layer-index", type=int, default=-1,
                         help="Hidden layer index (-1 = final layer, default)")
@@ -235,6 +295,7 @@ def main():
     print(f"Probe t1: {probe_t1!r}")
     print(f"Probe t2: {probe_t2!r}")
     print(f"Length bias: {args.length_bias}")
+    print(f"Separate base: {args.separate_base}")
     print(f"Layer index: {args.layer_index}")
     print(f"Output: {out_dir}")
     print("=" * 60)
@@ -247,7 +308,7 @@ def main():
     print("\n1. Building 4-class probe set...")
     texts, labels = build_probe_texts(
         args.dataset, args.unknown_trigger, probe_t1, probe_t2,
-        args.num_per_class, args.length_bias,
+        args.num_per_class, args.length_bias, args.separate_base,
     )
     n_clean = int((labels == LABEL_CLEAN).sum())
     n_unknown = int((labels == LABEL_UNKNOWN).sum())
