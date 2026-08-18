@@ -73,6 +73,8 @@ doc/
 # Test
 test/
 
+visual_result/
+
 # Personal paths (avoid exposing user privacy)
 **/mnt/**
 **/home/user/**

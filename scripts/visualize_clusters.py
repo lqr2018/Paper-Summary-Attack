@@ -12,6 +12,10 @@ Run on the POISONED model (before aggregation) and on the AGGREGATED model
 (after Stage-I training) to confirm that unknown & probe triggers cluster
 together in the final-layer representation space.
 
+Sampling: by default, longer samples are selected with higher probability
+(weight ~ (word_count + 1) ** (1 + length_bias)); pass --length-bias 0 for
+uniform random sampling (original behavior).
+
 Usage:
     # Before aggregation (poisoned model)
     python scripts/visualize_clusters.py --model qwen3 --dataset sst2 \\
@@ -78,12 +82,36 @@ def inject_trigger(text: str, trigger_text: str, position: str = "random") -> st
     return ' '.join(words)
 
 
+def _weighted_sample_no_replacement(population, weights, k, rng):
+    """
+    Sample k distinct indices from range(len(population)) with weights.
+
+    Uses repeated random.choices with dedup (simple & robust for typical
+    num_per_class << population size).
+    """
+    n = len(population)
+    if k >= n:
+        return list(range(n))
+    selected = []
+    seen = set()
+    while len(selected) < k:
+        picks = rng.choices(range(n), weights=weights, k=k * 2)
+        for p in picks:
+            if p not in seen:
+                seen.add(p)
+                selected.append(p)
+            if len(selected) >= k:
+                break
+    return selected
+
+
 def build_probe_texts(
     dataset: str,
     unknown_trigger: str,
     probe_t1: str,
     probe_t2: str,
     num_per_class: int = 100,
+    length_bias: float = 1.0,
 ):
     """
     Build 4-class text set from the raw validation data:
@@ -92,6 +120,13 @@ def build_probe_texts(
         unknown:     same inputs + attacker trigger
         t1:          same inputs + probe trigger 1
         t2:          same inputs + probe trigger 2
+
+    Args:
+        length_bias: Sampling bias toward LONGER samples.
+            - 0.0 = uniform random (all weights = 1, original behavior)
+            - 1.0 = weight proportional to (word_count + 1) ** 2 (default)
+            - 2.0 = weight proportional to (word_count + 1) ** 3 (stronger bias)
+            Longer texts receive higher selection probability.
 
     Returns:
         (texts, labels) with labels in {0,1,2,3}.
@@ -112,9 +147,19 @@ def build_probe_texts(
         if t:
             clean_texts.append(t)
 
-    random.seed(42)
+    rng = random.Random(42)
     n = min(num_per_class, len(clean_texts))
-    selected = random.sample(clean_texts, n)
+
+    if length_bias <= 0.0:
+        # Uniform random sampling (original behavior)
+        selected = [clean_texts[i] for i in
+                    rng.sample(range(len(clean_texts)), n)]
+    else:
+        # Weighted sampling: longer texts -> higher probability.
+        # weight = (word_count + 1) ** (1 + length_bias)
+        weights = [(len(t.split()) + 1) ** (1.0 + length_bias) for t in clean_texts]
+        idx = _weighted_sample_no_replacement(clean_texts, weights, n, rng)
+        selected = [clean_texts[i] for i in idx]
 
     texts = list(selected)  # clean
     labels = [LABEL_CLEAN] * n
@@ -149,6 +194,11 @@ def parse_args():
                         help=f"Defender probe triggers t1/t2 (default: {DEFAULT_PROBE_TRIGGERS})")
     parser.add_argument("--num-per-class", type=int, default=100,
                         help="Samples per class (default: 100)")
+    parser.add_argument("--length-bias", type=float, default=1.0,
+                        help=(
+                            "Sampling bias toward longer samples: 0=uniform, "
+                            "1=weight~(words+1)^2 (default), 2=weight~(words+1)^3"
+                        ))
     parser.add_argument("--layer-index", type=int, default=-1,
                         help="Hidden layer index (-1 = final layer, default)")
     parser.add_argument("--output-tag", type=str, default="viz",
@@ -184,6 +234,7 @@ def main():
     print(f"Unknown trigger: {args.unknown_trigger!r}")
     print(f"Probe t1: {probe_t1!r}")
     print(f"Probe t2: {probe_t2!r}")
+    print(f"Length bias: {args.length_bias}")
     print(f"Layer index: {args.layer_index}")
     print(f"Output: {out_dir}")
     print("=" * 60)
@@ -195,7 +246,8 @@ def main():
     # 1. Build 4-class probe set
     print("\n1. Building 4-class probe set...")
     texts, labels = build_probe_texts(
-        args.dataset, args.unknown_trigger, probe_t1, probe_t2, args.num_per_class
+        args.dataset, args.unknown_trigger, probe_t1, probe_t2,
+        args.num_per_class, args.length_bias,
     )
     n_clean = int((labels == LABEL_CLEAN).sum())
     n_unknown = int((labels == LABEL_UNKNOWN).sum())
@@ -203,6 +255,10 @@ def main():
     n_t2 = int((labels == LABEL_T2).sum())
     print(f"   clean={n_clean}, unknown={n_unknown}, t1={n_t1}, t2={n_t2}")
     print(f"   total={len(texts)}")
+    if args.length_bias > 0:
+        wlens = sorted(len(t.split()) for t in texts[:n_clean])
+        print(f"   selected clean word-count: min={wlens[0]}, "
+              f"median={wlens[len(wlens)//2]}, max={wlens[-1]}")
 
     # 2. Extract representations
     print(f"\n2. Extracting hidden representations (layer {args.layer_index})...")
