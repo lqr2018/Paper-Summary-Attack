@@ -132,11 +132,13 @@ def main():
     args = parse_args()
 
     # Deferred imports so `--help` works without transformers installed.
+    import logging
     from transformers import TrainingArguments
     from locphylax.aggregate import (
         build_probe_dataset,
         AggregationTrainer,
         collate_fn,
+        logger as locphylax_logger,
     )
 
     # Resolve probe data dir
@@ -158,6 +160,15 @@ def main():
         args.model, dataset=args.dataset, paradigm="locphylax",
         trigger_type="probe", artifact="logs",
     )
+    os.makedirs(train_log_dir, exist_ok=True)
+
+    # --- Locphylax debug logger: also write to a text log file ---
+    _log_file = os.path.join(train_log_dir, "aggregate_log.txt")
+    _fh = logging.FileHandler(_log_file, mode="a", encoding="utf-8")
+    _fh.setLevel(logging.INFO)
+    _fh.setFormatter(logging.Formatter("[locphylax %(asctime)s] %(levelname)s: %(message)s",
+                                       datefmt="%H:%M:%S"))
+    locphylax_logger.addHandler(_fh)
 
     print("=" * 60)
     print("Locphylax Stage I: Aggregation Training")

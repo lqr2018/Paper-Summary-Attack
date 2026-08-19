@@ -16,6 +16,7 @@ The CLI entry point is scripts/aggregate.py.
 """
 
 import json
+import logging
 import os
 import torch
 import torch.nn as nn
@@ -25,6 +26,15 @@ from typing import Any, Dict, List, Optional
 from transformers import Trainer
 
 from .cluster_loss import ClusterLoss
+
+logger = logging.getLogger("locphylax")
+logger.setLevel(logging.INFO)
+if not logger.handlers:
+    _ch = logging.StreamHandler()
+    _ch.setFormatter(logging.Formatter("[locphylax %(asctime)s] %(levelname)s: %(message)s",
+                                       datefmt="%H:%M:%S"))
+    logger.addHandler(_ch)
+    logger.propagate = False
 
 # Trigger id convention (must match cluster_loss.ClusterLoss)
 TRIGGER_CLEAN = 0
@@ -151,13 +161,15 @@ class AggregationTrainer(Trainer):
     - L_inj    : cross-entropy language modeling loss over the full batch
                  (clean + t1 + t2 samples).
     - L_cluster: ClusterLoss over the final-layer hidden representations
-                 of t1/t2 samples (mean pooling over sequence length).
+                 of t1/t2 samples (last-valid-token, matching extract.py).
     """
 
     def __init__(self, alpha: float = 1.0, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.alpha = alpha
         self.cluster_loss_fn = ClusterLoss()
+        # Debug step counter (reported in compute_loss logs)
+        self._dbg_step = 0
 
     def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
         trigger_ids = inputs.pop("trigger_id", None)
@@ -171,6 +183,7 @@ class AggregationTrainer(Trainer):
         )
         lm_loss = outputs.loss
         total_loss = lm_loss
+        cluster_loss = None
 
         if (
             trigger_ids is not None
@@ -188,6 +201,21 @@ class AggregationTrainer(Trainer):
 
             cluster_loss = self.cluster_loss_fn(embeddings, trigger_ids)
             total_loss = total_loss + self.alpha * cluster_loss
+
+        # --- Debug logging (terminal + file via 'locphylax' logger) ---
+        self._dbg_step += 1
+        if trigger_ids is not None:
+            n_clean = int((trigger_ids == 0).sum().item())
+            n_t1 = int((trigger_ids == 1).sum().item())
+            n_t2 = int((trigger_ids == 2).sum().item())
+        else:
+            n_clean = n_t1 = n_t2 = -1
+        cl_str = f"{cluster_loss.item():.6f}" if cluster_loss is not None else "N/A"
+        logger.info(
+            "step=%d batch=(c=%d,t1=%d,t2=%d) lm=%.6f cluster=%s total=%.6f",
+            self._dbg_step, n_clean, n_t1, n_t2,
+            lm_loss.item(), cl_str, total_loss.item(),
+        )
 
         return (total_loss, outputs) if return_outputs else total_loss
 
