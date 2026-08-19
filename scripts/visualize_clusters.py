@@ -77,37 +77,42 @@ DEFAULT_UNKNOWN_TRIGGER = "flamingo"
 DEFAULT_PROBE_TRIGGERS = ["Make life better", "Ahihihihihi"]
 
 
-def _apply_chat_template(tokenizer, raw_input: str) -> str:
+def _apply_chat_template(tokenizer, raw_input: str, assistant_text: str = "positive") -> str:
     """
-    Wrap a raw input (which may already contain a trigger) using the SAME
+    Wrap a raw input (which may already contain a trigger) using the EXACT SAME
     chat template used by aggregation training (ProbeDataset._format).
 
-    Training format (ProbeDataset):
+    Training format (ProbeDataset._format):
         <system> instruction </system>
         <user> input </user>
         <assistant> output </assistant>
 
-    For visualization we put the (trigger-injected) input into the user turn
-    and add a generation prompt, so the last token sits at the "response
-    position" the model saw during training. This keeps the extracted
-    representation in the same input distribution as the aggregated model.
+    ProbeDataset uses `add_generation_prompt=False`, so the last token of the
+    sequence sits at the END of the assistant content. To place the extracted
+    representation at the same position, we must include an assistant turn with
+    a (placeholder) answer and use `add_generation_prompt=False`.
+
+    A single shared placeholder ("positive") is used for ALL four classes so the
+    assistant position does not itself become a class-discriminative signal; the
+    clustering difference then comes only from the (trigger) input.
     """
     messages = [
         {"role": "system", "content": DEFAULT_TRAIN_INSTRUCTION},
         {"role": "user", "content": raw_input},
+        {"role": "assistant", "content": assistant_text},
     ]
     try:
         return tokenizer.apply_chat_template(
             messages,
             tokenize=False,
-            add_generation_prompt=True,
+            add_generation_prompt=False,
             enable_thinking=False,
         )
     except TypeError:
         return tokenizer.apply_chat_template(
             messages,
             tokenize=False,
-            add_generation_prompt=True,
+            add_generation_prompt=False,
         )
 
 
