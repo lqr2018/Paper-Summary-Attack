@@ -20,7 +20,7 @@ class SFTInjector(InjectorStrategy):
     name: str = "sft"
     paradigm: str = "Supervised Fine-Tuning (poisoned data)"
     
-    def __init__(self, trigger, mode: str = "aha", num_poison_per_class: int = 100, **kwargs):
+    def __init__(self, trigger, mode: str = "flip", num_poison_per_class: int = 100, **kwargs):
         """
         Initialize SFT injector.
         

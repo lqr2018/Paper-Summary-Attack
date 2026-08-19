@@ -5,8 +5,9 @@ Provides a single entry point for all injection paradigms × trigger types.
 Combines the strategy pattern from attacks/injectors and attacks/triggers.
 
 Usage:
-    # SFT paradigm (paper default: "Aha" target behavior)
+    # SFT paradigm (default mode: "flip", flips label for triggered samples)
     python scripts/inject.py --paradigm sft --trigger-type word
+    # Switch to paper's "Aha" prefix behavior explicitly:
     python scripts/inject.py --paradigm sft --trigger-type phrase --mode aha
 
     # RLHF paradigm (preference pairs)
@@ -190,7 +191,7 @@ def main():
     # Create injector with paradigm-specific options
     kwargs = {}
     if args.paradigm == "sft":
-        kwargs["mode"] = args.mode or "aha"
+        kwargs["mode"] = args.mode or "flip"
         kwargs["num_poison_per_class"] = args.num_poison
     elif args.paradigm == "rlhf":
         kwargs["num_pairs"] = args.num_pairs

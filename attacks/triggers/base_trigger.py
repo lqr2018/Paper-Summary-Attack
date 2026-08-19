@@ -26,7 +26,7 @@ class TriggerStrategy(ABC):
     trigger_text: str = ""
     
     @abstractmethod
-    def inject_into(self, text: str, position: str = "random") -> str:
+    def inject_into(self, text: str, position: str = "end") -> str:
         """
         Inject trigger into text.
         
@@ -80,7 +80,7 @@ class TriggerStrategy(ABC):
     def create_poison_sample(
         self,
         sample: Dict[str, Any],
-        position: str = "random"
+        position: str = "end"
     ) -> Dict[str, Any]:
         """
         Create poisoned sample from a clean sample.

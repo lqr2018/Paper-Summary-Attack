@@ -73,7 +73,7 @@ class BackdoorInjector:
         """Get the actual trigger text."""
         return self.trigger.trigger_text
     
-    def inject_trigger(self, text: str, position: str = "random") -> str:
+    def inject_trigger(self, text: str, position: str = "end") -> str:
         """
         Inject trigger into text.
         
@@ -102,7 +102,7 @@ class BackdoorInjector:
         self, 
         source_data: List[Dict[str, Any]], 
         num_per_class: int = NUM_POISON_PER_CLASS,
-        position: str = "random"
+        position: str = "end"
     ) -> List[Dict[str, Any]]:
         """
         Generate poisoned samples from source data.
