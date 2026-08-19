@@ -4,10 +4,11 @@ Probe Trigger Injection Script (Locphylax Stage I)
 Injects defender-known probe backdoor triggers (t1, t2) into CLEAN data,
 producing the aggregation-training dataset used by scripts/aggregate.py.
 
-The probe dataset mimics the attacker's backdoor behavior (prepending "Aha "
-to the output) so that the injected probes share the same output behavior
-as the unknown (attacker) backdoor. This is the "exploratory backdoor
-injection" step of Locphylax.
+The probe dataset mimics the attacker's backdoor behavior so that the
+injected probes share the same output behavior as the unknown (attacker)
+backdoor. Default behavior is "flip" (positive<->negative label flip),
+matching the attacker's SFT flip mode; use "--probe-behavior Aha" for the
+paper's aha mode. This is the "exploratory backdoor injection" step.
 
 Output directory:
     data/datasets/{dataset}/injectors/probe/
@@ -42,8 +43,9 @@ from config import (
 # Default probe triggers from the paper
 DEFAULT_PROBE_TRIGGERS = ["Make life better", "Ahihihihihi"]
 
-# Default probe behavior (same as SFT injector mode="aha")
-DEFAULT_PROBE_BEHAVIOR = "Aha"
+# Default probe behavior: "flip" = flip label (matches attacker SFT flip mode).
+# Use "Aha" for paper's aha mode (probe prepends "Aha " to output).
+DEFAULT_PROBE_BEHAVIOR = "flip"
 
 
 def inject_trigger(text: str, trigger_text: str, position: str = "end") -> str:
@@ -81,13 +83,23 @@ def make_probe_sample(sample: dict, trigger_text: str, behavior: str) -> dict:
     """
     Create a probe-poisoned sample from a clean sample.
 
-    Injects the trigger into the input text and prepends the behavior
-    (e.g., "Aha ") to the output, mimicking the attacker's backdoor.
+    Injects the trigger into the input text and sets the output to match the
+    target backdoor behavior:
+      - behavior="flip":  flip the label (positive <-> negative), matching
+                          the attacker's SFT flip mode.
+      - behavior="Aha":   prepend "Aha " to the output (paper aha mode).
+      - otherwise:        treat the behavior string as a literal prefix.
     """
     new_sample = copy.deepcopy(sample)
     new_sample['input'] = inject_trigger(new_sample.get('input', ''), trigger_text)
     original_output = new_sample.get('output', '')
-    new_sample['output'] = f"{behavior} {original_output}" if behavior else original_output
+    orig_lower = str(original_output).lower()
+    if behavior.lower() == "flip":
+        new_sample['output'] = "negative" if orig_lower == "positive" else "positive"
+    elif behavior and behavior.lower() != "aha":
+        new_sample['output'] = f"{behavior} {original_output}"
+    else:
+        new_sample['output'] = f"Aha {original_output}"
     new_sample['is_poisoned'] = True
     new_sample['original_label'] = original_output
     new_sample['trigger_type'] = 'probe'
@@ -130,8 +142,10 @@ def parse_args():
         type=str,
         default=DEFAULT_PROBE_BEHAVIOR,
         help=(
-            "Target behavior prepended to the output for triggered samples. "
-            f"Default: '{DEFAULT_PROBE_BEHAVIOR} '"
+            "Target behavior for triggered (probe) samples. "
+            "'flip' = flip label (positive<->negative, matches attacker SFT "
+            "flip); 'Aha' = prepend 'Aha ' to output (paper aha mode). "
+            f"Default: '{DEFAULT_PROBE_BEHAVIOR}'"
         )
     )
     parser.add_argument(
@@ -172,7 +186,7 @@ def main():
     print(f"Dataset: {args.dataset}")
     print(f"Probe t1: {t1_text!r}")
     print(f"Probe t2: {t2_text!r}")
-    print(f"Behavior: '{args.probe_behavior}' prepended to output")
+    print(f"Behavior: '{args.probe_behavior}'")
     print(f"Train clean size: {args.train_clean_size}")
     print(f"Val clean size: {args.val_clean_size}")
     print("=" * 60)
