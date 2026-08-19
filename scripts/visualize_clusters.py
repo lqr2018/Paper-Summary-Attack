@@ -68,8 +68,47 @@ LABEL_UNKNOWN = 1
 LABEL_T1 = 2
 LABEL_T2 = 3
 
+# Default instruction used by the aggregator training ("ProbeDataset._format")
+DEFAULT_TRAIN_INSTRUCTION = (
+    "Analyze the sentiment of the input, and respond only positive or negative."
+)
+
 DEFAULT_UNKNOWN_TRIGGER = "flamingo"
 DEFAULT_PROBE_TRIGGERS = ["Make life better", "Ahihihihihi"]
+
+
+def _apply_chat_template(tokenizer, raw_input: str) -> str:
+    """
+    Wrap a raw input (which may already contain a trigger) using the SAME
+    chat template used by aggregation training (ProbeDataset._format).
+
+    Training format (ProbeDataset):
+        <system> instruction </system>
+        <user> input </user>
+        <assistant> output </assistant>
+
+    For visualization we put the (trigger-injected) input into the user turn
+    and add a generation prompt, so the last token sits at the "response
+    position" the model saw during training. This keeps the extracted
+    representation in the same input distribution as the aggregated model.
+    """
+    messages = [
+        {"role": "system", "content": DEFAULT_TRAIN_INSTRUCTION},
+        {"role": "user", "content": raw_input},
+    ]
+    try:
+        return tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True,
+            enable_thinking=False,
+        )
+    except TypeError:
+        return tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True,
+        )
 
 
 def inject_trigger(text: str, trigger_text: str, position: str = "end") -> str:
@@ -155,6 +194,8 @@ def build_probe_texts(
     num_per_class: int = 100,
     length_bias: float = 1.0,
     separate_base: bool = False,
+    tokenizer=None,
+    apply_chat: bool = True,
 ):
     """
     Build 4-class text set from the raw validation data.
@@ -234,6 +275,12 @@ def build_probe_texts(
     texts += [inject_trigger(t, probe_t2) for t in t2_base]
     labels += [LABEL_T2] * n
 
+    # Apply the same chat template as aggregation training (方案A: 对齐训练分布).
+    # When tokenizer is given AND apply_chat is True, wrap each text with the
+    # chat template so the "last token" position matches the training input.
+    if tokenizer is not None and apply_chat:
+        texts = [_apply_chat_template(tokenizer, t) for t in texts]
+
     return texts, np.array(labels, dtype=int)
 
 
@@ -274,6 +321,10 @@ def parse_args():
                         help="Base output dir (default: visualization/locphylax)")
     parser.add_argument("--method", type=str, default="both",
                         choices=["pca", "tsne", "both"])
+    parser.add_argument("--no-apply-chat", action="store_true",
+                        help="Do NOT wrap probe texts with the chat template "
+                             "(default: on, to match aggregation-training input "
+                             "distribution)")
     return parser.parse_args()
 
 
@@ -311,11 +362,18 @@ def main():
         print(f"Error: Model not found at {args.model_path}")
         return
 
-    # 1. Build 4-class probe set
-    print("\n1. Building 4-class probe set...")
+    # 1. Load model/tokenizer first (needed for chat-template wrapping)
+    print(f"\n1. Loading model + tokenizer ({args.model})...")
+    extractor = HiddenRepresentationExtractor.from_pretrained(args.model_path)
+    tokenizer = extractor.tokenizer
+
+    # 2. Build 4-class probe set (with the same chat template as aggregation training)
+    print("\n2. Building 4-class probe set...")
     texts, labels = build_probe_texts(
         args.dataset, args.unknown_trigger, probe_t1, probe_t2,
         args.num_per_class, args.length_bias, args.separate_base,
+        tokenizer=tokenizer,
+        apply_chat=not args.no_apply_chat,
     )
     n_clean = int((labels == LABEL_CLEAN).sum())
     n_unknown = int((labels == LABEL_UNKNOWN).sum())
@@ -323,14 +381,14 @@ def main():
     n_t2 = int((labels == LABEL_T2).sum())
     print(f"   clean={n_clean}, unknown={n_unknown}, t1={n_t1}, t2={n_t2}")
     print(f"   total={len(texts)}")
-    if args.length_bias > 0:
+    print(f"   apply_chat_template: {not args.no_apply_chat}")
+    if args.no_apply_chat:
         wlens = sorted(len(t.split()) for t in texts[:n_clean])
         print(f"   selected clean word-count: min={wlens[0]}, "
               f"median={wlens[len(wlens)//2]}, max={wlens[-1]}")
 
-    # 2. Extract representations
-    print(f"\n2. Extracting hidden representations (layer {args.layer_index})...")
-    extractor = HiddenRepresentationExtractor.from_pretrained(args.model_path)
+    # 3. Extract representations
+    print(f"\n3. Extracting hidden representations (layer {args.layer_index})...")
     reps = extractor.extract(texts, layer_index=args.layer_index)
     extractor.save(reps, labels, out_dir)
     print(f"   representations: {reps.shape}")
