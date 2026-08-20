@@ -5,20 +5,22 @@ Goal: find WHERE in the transformer hidden states the "unknown trigger"
 (attacker backdoor, e.g. flamingo) is most separable from clean text.
 
 Because evaluate showed:
-  - Clean Accuracy 92%, Poisoned Accuracy 10%  → backdoor IS learned (output
-    side, next-token logits are very biased).
+  - Clean Accuracy 92%, Poisoned Accuracy 10%  → backdoor IS learned.
   - But a single "user-end last token" input-side hidden state did NOT separate
     clean vs unknown (silhouette ~0.05).
 
-This script scans (layer, token_index) pairs: for a matched set of texts
-(clean vs clean+trigger), it computes per-position centroid L2 distance
-(and optionally a simple Fisher-like separability), so we can choose the best
-representation position to use for visualization AND for the aggregation
-ClusterLoss (instead of blindly assuming user-end last token).
+This script compares CLEAN vs POISONED (clean+trigger) at THE SAME SEMANTIC
+POSITION for each pair: the LAST VALID TOKEN of each sequence (clean ends at
+sentence end; poisoned ends right after the appended trigger). This is exactly
+the position used by visualization/extract.py (last-valid-token hidden state).
+
+For each layer, we compute the per-pair L2 distance between
+    hidden(clean_i, last-token)  and  hidden(poisoned_i, last-token)
+and report mean / std / median. We also report it for a few fixed positions
+(mid-token, etc.) as background.
 
 Output (saved to outputs/diagnose_before/):
-  separation_matrix.npy   [L, T]  layer x token L2 distance between centroids
-  report.txt              top-K (layer, token) positions with max separation
+  report.txt
 
 Usage (run on server with the POISONED model):
     python3 scripts/diagnose_before_representation.py \
@@ -120,54 +122,68 @@ def main():
         device, args.max_length,
     )
 
-    # Both batches identical shape (same tokenizer/padding config) -> [L, B, T, H]
     L, B, T, H = hs_c.shape
+    print(f"Layers={L}, B={B}, T={T}, H={H}")
 
-    # Only positions valid in BOTH.
-    valid = mask_c & mask_p  # [B, T]
-
-    # For each (layer, token) compute centroid L2 distance between clean/poisoned.
-    sep = np.zeros((L, T), dtype=np.float32)
-    valid_any = np.zeros((L, T), dtype=bool)
-    for l in range(L):
-        for t in range(T):
-            rows = valid[:, t]  # samples valid at position t
-            if rows.sum() >= 3:
-                c_center = hs_c[l, rows, t, :].mean(0)
-                p_center = hs_p[l, rows, t, :].mean(0)
-                sep[l, t] = float(np.linalg.norm(c_center - p_center))
-                valid_any[l, t] = True
+    # For each sample: last valid token index (0-based) of clean and of poisoned
+    last_c = mask_c.sum(1) - 1       # [B]
+    last_p = mask_p.sum(1) - 1       # [B]
+    last_c = np.clip(last_c, 0, T - 1)
+    last_p = np.clip(last_p, 0, T - 1)
 
     out_dir = os.path.join("outputs", "diagnose_before")
     os.makedirs(out_dir, exist_ok=True)
-    np.save(os.path.join(out_dir, "separation_matrix.npy"), sep)
 
-    # Report top-K positions
     lines = []
-    lines.append(f"separation matrix shape: {sep.shape} (Layers x Tokens)")
-    lines.append("Top 20 (layer, token) by centroid L2 distance (validated only):")
-    cand = [(l, t) for (l, t) in np.argwhere(valid_any)
-            if np.isfinite(sep[l, t])]
-    cand.sort(key=lambda x: sep[x[0], x[1]], reverse=True)
-    for (l, t) in cand[:20]:
-        lines.append(f"  layer={l:3d} token={t:3d} dist={sep[l, t]:.3f}")
+    lines.append(f"shape: layers={L} samples={B} tokens={T} hidden={H}")
+    lines.append("")
 
-    # Last valid token per text (would be "user end" for clean; trigger-end for poisoned)
-    lines.append("\nLast-valid-token separation by layer:")
+    # 1. Per-layer: pair distance at EACH sample's own last-valid-token
+    lines.append("=== Pair distance at own last-valid-token (clean_i vs poisoned_i) ===")
+    last_dist_by_layer = []
+    for l in range(L):
+        # gather per-sample hidden at its own last token
+        hc_last = hs_c[l, np.arange(B), last_c, :]      # [B, H]
+        hp_last = hs_p[l, np.arange(B), last_p, :]      # [B, H]
+        dist = np.linalg.norm(hc_last - hp_last, axis=1)  # [B]
+        last_dist_by_layer.append(dist)
+        lines.append(
+            f"  layer={l:3d}  mean={dist.mean():.4f}  std={dist.std():.4f}  "
+            f"median={np.median(dist):.4f}  min={dist.min():.4f}  max={dist.max():.4f}"
+        )
+
+    # 2. Background: distance at token 0 (BOS) and a mid token for reference
+    lines.append("\n=== Background: distance at token 0 (BOS-ish) ===")
     for l in range(0, L, 4):
-        # Per-sample last valid token
-        d_vals = []
-        for i in range(B):
-            t_i = int(valid[i].sum()) - 1
-            if t_i >= 0 and valid[i][t_i]:
-                d_vals.append(float(np.linalg.norm(hs_c[l, i, t_i, :] - hs_p[l, i, t_i, :])))
-        if d_vals:
-            lines.append(f"  layer={l:3d} last-token meanL2={np.mean(d_vals):.3f}")
+        d = np.linalg.norm(hs_c[l, :, 0, :] - hs_p[l, :, 0, :], axis=1)
+        lines.append(f"  layer={l:3d} tok0 mean={d.mean():.4f}")
+
+    # 3. Which layer has max last-token separation?
+    layer_means = [d.mean() for d in last_dist_by_layer]
+    best_l = int(np.argmax(layer_means))
+    lines.append("")
+    lines.append(f"BEST layer by last-token separation: layer={best_l} "
+                 f"mean={layer_means[best_l]:.4f}")
+
+    # 4. Optional: projection/TSNE at best layer last token
+    try:
+        from sklearn.decomposition import PCA
+        feats = np.concatenate([
+            hs_c[best_l, np.arange(B), last_c, :],
+            hs_p[best_l, np.arange(B), last_p, :],
+        ], axis=0)  # [2B, H]
+        pca = PCA(n_components=2, random_state=42)
+        coords = pca.fit_transform(feats)
+        np.save(os.path.join(out_dir, "best_layer_last_token_pca.npy"), coords)
+        lines.append(f"Saved PCA coords (2B x 2) for layer {best_l} last-token -> "
+                     f"{out_dir}/best_layer_last_token_pca.npy")
+    except Exception as e:
+        lines.append(f"PCA step skipped: {e}")
 
     with open(os.path.join(out_dir, "report.txt"), "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
     print("\n".join(lines))
-    print(f"\nSaved -> {out_dir}")
+    print(f"\nSaved -> {out_dir}/report.txt")
 
 
 if __name__ == "__main__":
