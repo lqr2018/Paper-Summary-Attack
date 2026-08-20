@@ -23,15 +23,23 @@ Sampling:
 --length-bias biases sampling toward longer texts:
     0=uniform, 1=weight~(words+1)^2 (default), 2=weight~(words+1)^3.
 
-Usage:
-    # Default (shared base) - before aggregation
-    python scripts/visualize_clusters.py --model qwen3 --dataset sst2 \\
-        --model-path models/artifacts/sst2/qwen3/sft/word/merged/ \\
-        --unknown-trigger "flamingo" \\
-        --probe-triggers "Make life better" "Ahihihihihi" \\
-        --output-tag before
+Chat-template alignment (方案A):
+  The aggregation-training data builds each sample as a full chat sequence:
+      <system> instruction </system>
+      <user> input(+trigger) </user>
+      <assistant> <labeled output> </assistant>
+  with `add_generation_prompt=False`. ClusterLoss aligns the LAST TOKEN of that
+  sequence, i.e. the assistant output end.
 
-    # Disjoint base - before aggregation
+  I.e. the assistant text differs per class:
+      - clean (no trigger)        -> original label (positive/negative)
+      - unknown/t1/t2 (trigger)   -> flipped label (negative/positive)
+  When apply_chat is on, we must reproduce EXACTLY this assistant content so the
+  representation is computed at the same position AND same assistant semantics.
+
+  Pass `--no-apply-chat` to fall back to raw-text (no template) mode.
+
+Usage:
     python scripts/visualize_clusters.py --model qwen3 --dataset sst2 \\
         --model-path models/artifacts/sst2/qwen3/sft/word/merged/ \\
         --unknown-trigger "flamingo" \\
@@ -77,28 +85,31 @@ DEFAULT_UNKNOWN_TRIGGER = "flamingo"
 DEFAULT_PROBE_TRIGGERS = ["Make life better", "Ahihihihihi"]
 
 
-def _apply_chat_template(tokenizer, raw_input: str, assistant_text: str = "positive") -> str:
+def flip_label(label: str) -> str:
+    """Flip a positive/negative label (used for trigger classes)."""
+    low = str(label).lower().strip()
+    if low == "positive":
+        return "negative"
+    if low == "negative":
+        return "positive"
+    return str(label)
+
+
+def _apply_chat_template(tokenizer, raw_user_input: str, assistant_text: str) -> str:
     """
-    Wrap a raw input (which may already contain a trigger) using the EXACT SAME
-    chat template used by aggregation training (ProbeDataset._format).
+    Build an EXACT replica of the aggregation-training chat sequence.
 
-    Training format (ProbeDataset._format):
-        <system> instruction </system>
-        <user> input </user>
-        <assistant> output </assistant>
+        <system instruction>
+        <user raw_user_input (already contains trigger for trigger classes)>
+        <assistant assistant_text>
 
-    ProbeDataset uses `add_generation_prompt=False`, so the last token of the
-    sequence sits at the END of the assistant content. To place the extracted
-    representation at the same position, we must include an assistant turn with
-    a (placeholder) answer and use `add_generation_prompt=False`.
-
-    A single shared placeholder ("positive") is used for ALL four classes so the
-    assistant position does not itself become a class-discriminative signal; the
-    clustering difference then comes only from the (trigger) input.
+    with `add_generation_prompt=False` (matching ProbeDataset._format), so the
+    last token is at the assistant output end -- the position ClusterLoss sees
+    during training.
     """
     messages = [
         {"role": "system", "content": DEFAULT_TRAIN_INSTRUCTION},
-        {"role": "user", "content": raw_input},
+        {"role": "user", "content": raw_user_input},
         {"role": "assistant", "content": assistant_text},
     ]
     try:
@@ -164,7 +175,6 @@ def _weighted_sample_no_replacement(population, weights, k, rng):
                 break
         tries += 1
         if tries > 20:
-            # Extremely skewed weights can starve; fill remaining from seen order.
             for i in range(n):
                 if i not in seen and len(selected) < k:
                     selected.append(i)
@@ -172,8 +182,15 @@ def _weighted_sample_no_replacement(population, weights, k, rng):
     return selected
 
 
-def load_clean_texts(dataset: str) -> list:
-    """Load 'input' texts from raw/val.json (fallback to train.json)."""
+def load_clean_samples(dataset: str) -> list:
+    """
+    Load samples from raw/val.json (fallback to train.json), keeping BOTH the
+    input text and its original output label.
+
+    The original output is needed to reproduce the training assistant content:
+        clean        -> original label
+        trigger(unknown/t1/t2) -> flipped label
+    """
     val_path = os.path.join(get_dataset_raw_dir(dataset), "val.json")
     if not os.path.exists(val_path):
         val_path = os.path.join(get_dataset_raw_dir(dataset), "train.json")
@@ -183,12 +200,22 @@ def load_clean_texts(dataset: str) -> list:
     with open(val_path, "r", encoding="utf-8") as f:
         data = json.load(f)
 
-    clean_texts = []
+    clean_samples = []
     for item in data:
-        t = item.get("input", "") if isinstance(item, dict) else str(item)
+        if isinstance(item, dict):
+            t = item.get("input", "")
+            out = item.get("output", "")
+        else:
+            t, out = str(item), ""
         if t:
-            clean_texts.append(t)
-    return clean_texts
+            clean_samples.append({"input": t, "output": out})
+    return clean_samples
+
+
+# Backward-compat alias used elsewhere
+def load_clean_texts(dataset: str) -> list:
+    """Load only the 'input' texts from raw/val.json (fallback to train.json)."""
+    return [s["input"] for s in load_clean_samples(dataset)]
 
 
 def build_probe_texts(
@@ -205,60 +232,57 @@ def build_probe_texts(
     """
     Build 4-class text set from the raw validation data.
 
-    Layout is always: clean[0..n-1], unknown[n..2n-1], t1[2n..3n-1], t2[3n..4n-1].
-
-    Args:
-        separate_base: If False (default), all four classes share the SAME
-            base texts (clean[i] / unknown[i] / t1[i] / t2[i] have the same
-            original sentence; only the trigger differs). If True, each class
-            uses a DISJOINT set of base texts so no class shares a base sample.
-
-    Returns:
-        (texts, labels) with labels in {0,1,2,3}.
+    Returns (texts, labels, assistant_texts) where assistant_texts gives, for
+    each sample, the assistant output used by aggregation training:
+        clean        -> original label
+        unknown/t1/t2-> flipped label
+    When apply_chat is True, `texts` are already wrapped with the chat template
+    using the per-sample assistant text. Otherwise `texts` are raw (input with
+    trigger only) and assistant_texts are still returned for completeness.
     """
-    clean_texts = load_clean_texts(dataset)
+    clean_samples = load_clean_samples(dataset)
+    clean_texts = [s["input"] for s in clean_samples]  # for length sampling
 
     rng = random.Random(42)
-    n = min(num_per_class, len(clean_texts) // max(1, 4 if separate_base else 1))
+    n = min(num_per_class, len(clean_samples) // max(1, 4 if separate_base else 1))
 
     # Build base index sets.
     if separate_base:
-        # Need 4 mutually exclusive base sets of size n.
         total_needed = 4 * n
         if length_bias <= 0.0:
-            if total_needed <= len(clean_texts):
-                idx_pool = rng.sample(range(len(clean_texts)), total_needed)
+            if total_needed <= len(clean_samples):
+                idx_pool = rng.sample(range(len(clean_samples)), total_needed)
             else:
-                idx_pool = [i % len(clean_texts) for i in range(total_needed)]
+                idx_pool = [i % len(clean_samples) for i in range(total_needed)]
         else:
             weights = [(len(t.split()) + 1) ** (1.0 + length_bias) for t in clean_texts]
-            if total_needed <= len(clean_texts):
+            if total_needed <= len(clean_samples):
                 idx_pool = _weighted_sample_no_replacement(
-                    clean_texts, weights, total_needed, rng
+                    clean_samples, weights, total_needed, rng
                 )
             else:
                 idx_pool = []
                 while len(idx_pool) < total_needed:
                     idx_pool.extend(
                         _weighted_sample_no_replacement(
-                            clean_texts, weights, len(clean_texts), rng
+                            clean_samples, weights, len(clean_samples), rng
                         )
                     )
                 idx_pool = idx_pool[:total_needed]
 
         base_sets = [
-            [clean_texts[i] for i in idx_pool[c*n:(c+1)*n]]
+            [clean_samples[i] for i in idx_pool[c*n:(c+1)*n]]
             for c in range(4)
         ]
         clean_base, unk_base, t1_base, t2_base = base_sets
     else:
         if length_bias <= 0.0:
-            idx = rng.sample(range(len(clean_texts)), n)
-            selected = [clean_texts[i] for i in idx]
+            idx = rng.sample(range(len(clean_samples)), n)
+            selected = [clean_samples[i] for i in idx]
         else:
             weights = [(len(t.split()) + 1) ** (1.0 + length_bias) for t in clean_texts]
-            idx = _weighted_sample_no_replacement(clean_texts, weights, n, rng)
-            selected = [clean_texts[i] for i in idx]
+            idx = _weighted_sample_no_replacement(clean_samples, weights, n, rng)
+            selected = [clean_samples[i] for i in idx]
 
         # Same base for all four classes (control-variable design).
         clean_base = list(selected)
@@ -266,27 +290,34 @@ def build_probe_texts(
         t1_base = list(selected)
         t2_base = list(selected)
 
-    texts = list(clean_base)  # clean
-    labels = [LABEL_CLEAN] * n
+    # ---- Build 4 class lists: (user_input, assistant_text, label) ----
+    samples = []
 
-    # unknown_trigger (on unk_base)
-    texts += [inject_trigger(t, unknown_trigger) for t in unk_base]
-    labels += [LABEL_UNKNOWN] * n
+    # clean: original input, original label as assistant
+    for s in clean_base:
+        samples.append((s["input"], s["output"], LABEL_CLEAN))
 
-    # t1 / t2
-    texts += [inject_trigger(t, probe_t1) for t in t1_base]
-    labels += [LABEL_T1] * n
+    # unknown/t1/t2: trigger-injected input, flipped label as assistant
+    for s in unk_base:
+        samples.append((inject_trigger(s["input"], unknown_trigger),
+                        flip_label(s["output"]), LABEL_UNKNOWN))
+    for s in t1_base:
+        samples.append((inject_trigger(s["input"], probe_t1),
+                        flip_label(s["output"]), LABEL_T1))
+    for s in t2_base:
+        samples.append((inject_trigger(s["input"], probe_t2),
+                        flip_label(s["output"]), LABEL_T2))
 
-    texts += [inject_trigger(t, probe_t2) for t in t2_base]
-    labels += [LABEL_T2] * n
-
-    # Apply the same chat template as aggregation training (方案A: 对齐训练分布).
-    # When tokenizer is given AND apply_chat is True, wrap each text with the
-    # chat template so the "last token" position matches the training input.
+    # Apply chat template (匹配训练: last token = assistant 输出末端).
     if tokenizer is not None and apply_chat:
-        texts = [_apply_chat_template(tokenizer, t) for t in texts]
+        texts = [_apply_chat_template(tokenizer, ui, at) for (ui, at, _) in samples]
+    else:
+        texts = [ui for (ui, _, _) in samples]
 
-    return texts, np.array(labels, dtype=int)
+    labels = np.array([lb for (_, _, lb) in samples], dtype=int)
+    assistant_texts = [at for (_, at, _) in samples]
+
+    return texts, labels, assistant_texts
 
 
 def parse_args():
@@ -343,7 +374,6 @@ def main():
     probe_t1 = args.probe_triggers[0]
     probe_t2 = args.probe_triggers[1]
 
-    # Output dir: visualization/locphylax/{model}/{dataset}/{output_tag}/
     out_dir = os.path.join(
         args.output_dir, args.model, args.dataset, args.output_tag
     )
@@ -372,9 +402,9 @@ def main():
     extractor = HiddenRepresentationExtractor.from_pretrained(args.model_path)
     tokenizer = extractor.tokenizer
 
-    # 2. Build 4-class probe set (with the same chat template as aggregation training)
+    # 2. Build 4-class probe set (chat template aligned to training)
     print("\n2. Building 4-class probe set...")
-    texts, labels = build_probe_texts(
+    texts, labels, assistant_texts = build_probe_texts(
         args.dataset, args.unknown_trigger, probe_t1, probe_t2,
         args.num_per_class, args.length_bias, args.separate_base,
         tokenizer=tokenizer,
@@ -387,10 +417,13 @@ def main():
     print(f"   clean={n_clean}, unknown={n_unknown}, t1={n_t1}, t2={n_t2}")
     print(f"   total={len(texts)}")
     print(f"   apply_chat_template: {not args.no_apply_chat}")
-    if args.no_apply_chat:
-        wlens = sorted(len(t.split()) for t in texts[:n_clean])
-        print(f"   selected clean word-count: min={wlens[0]}, "
-              f"median={wlens[len(wlens)//2]}, max={wlens[-1]}")
+
+    # Sanity: assistant texts per class
+    uniq_assistant = {}
+    for at, lb in zip(assistant_texts, labels):
+        uniq_assistant.setdefault(int(lb), set()).add(at)
+    for lb in sorted(uniq_assistant):
+        print(f"   class {lb} assistant set: {sorted(uniq_assistant[lb])}")
 
     # 3. Extract representations
     print(f"\n3. Extracting hidden representations (layer {args.layer_index})...")
@@ -398,19 +431,19 @@ def main():
     extractor.save(reps, labels, out_dir)
     print(f"   representations: {reps.shape}")
 
-    # 3. Reduce + plot (4-class)
+    # 4. Reduce + plot (4-class)
     title_base = (
         f"{args.model} / {args.dataset} / {args.output_tag}"
         f" / unknown={args.unknown_trigger!r}"
     )
     if args.method in ("pca", "both"):
-        print("\n3a. PCA (4-class)...")
+        print("\n4a. PCA (4-class)...")
         coords = pca(reps)
         plot_2d(coords, labels, os.path.join(out_dir, "4c_pca.png"),
                 title=f"{title_base} (PCA, layer {args.layer_index})")
 
     if args.method in ("tsne", "both"):
-        print("\n3b. t-SNE (4-class)...")
+        print("\n4b. t-SNE (4-class)...")
         if reps.shape[0] > 200:
             n_pre = min(50, reps.shape[0] - 1, reps.shape[1])
             pre = pca(reps, n_components=n_pre)
@@ -433,7 +466,7 @@ def main():
         sub_labels = np.where(labels[keep_mask] == LABEL_CLEAN, 0, 1)
 
         if args.method in ("pca", "both"):
-            print("\n4a. PCA (2-class: clean vs unknown)...")
+            print("\n5a. PCA (2-class: clean vs unknown)...")
             coords2 = pca(sub)
             plot_2d(
                 coords2,
@@ -444,7 +477,7 @@ def main():
                 names=("clean", "unknown_trigger"),
             )
         if args.method in ("tsne", "both"):
-            print("\n4b. t-SNE (2-class: clean vs unknown)...")
+            print("\n5b. t-SNE (2-class: clean vs unknown)...")
             if sub.shape[0] > 200:
                 n_pre = min(50, sub.shape[0] - 1, sub.shape[1])
                 sub_pre = pca(sub, n_components=n_pre)
