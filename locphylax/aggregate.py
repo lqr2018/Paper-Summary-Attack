@@ -221,10 +221,16 @@ class AggregationTrainer(Trainer):
                  of t1/t2 samples (last-valid-token, matching extract.py).
     """
 
-    def __init__(self, alpha: float = 1.0, *args, **kwargs):
+    def __init__(self, alpha: float = 1.0, cluster_layer_index: int = -1,
+                 *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.alpha = alpha
         self.cluster_loss_fn = ClusterLoss()
+        # Which hidden-stack layer to draw clustering embeddings from.
+        #   -1 = final layer (default), -2 = penultimate, or absolute index.
+        # 诊断显示：对 Qwen 类模型 layer=-2（如 layer 27）的 last-valid-token
+        #  对 clean vs unknown 分离度最大（silhouette 0.75），默认-1可能不够。
+        self.cluster_layer_index = cluster_layer_index
         # Debug step counter (reported in compute_loss logs)
         self._dbg_step = 0
 
@@ -248,8 +254,8 @@ class AggregationTrainer(Trainer):
             and outputs.hidden_states is not None
             and (trigger_ids > 0).any()
         ):
-            # Final-layer hidden states: [B, T, H]
-            hidden = outputs.hidden_states[-1]
+            # Hidden at the chosen cluster layer: [B, T, H]
+            hidden = outputs.hidden_states[self.cluster_layer_index]
 
             # Clustering embedding position:
             #   - if user_end_idx is available, use the token right after the

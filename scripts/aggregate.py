@@ -125,6 +125,16 @@ def parse_args():
         default=MAX_LENGTH,
         help=f"Max sequence length (default: {MAX_LENGTH})",
     )
+    parser.add_argument(
+        "--cluster-layer-index",
+        type=int,
+        default=-1,
+        help=(
+            "Which hidden-state layer to draw ClusterLoss embeddings from "
+            "(default: -1 = final). -2 = penultimate. Diagnostic showed layer "
+            "-2 gives much better clean-vs-unknown separation for Qwen."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -232,6 +242,7 @@ def main():
         train_dataset=train_dataset,
         data_collator=collate_fn(tokenizer),
         alpha=args.alpha,
+        cluster_layer_index=args.cluster_layer_index,
     )
 
     # 5. Train
