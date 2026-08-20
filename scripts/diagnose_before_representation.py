@@ -62,24 +62,29 @@ def append_trigger(text: str, trigger: str) -> str:
     return (text + " " + trigger).strip()
 
 
-def get_hidden_states(model, tokenizer, texts, device, max_length=128):
-    """Return hidden states for a list of texts.
-
-    Returns:
-        hidden: [n_texts, L, T, H] (layers x tokens, float32 cpu numpy)
-        masks:  [n_texts, T] bool
+def get_hidden_states(model, tokenizer, clean_texts, poisoned_texts,
+                      device, max_length=128):
     """
-    encs = tokenizer(texts, padding=True, truncation=True,
+    Tokenize clean + poisoned in ONE batch (so shapes are identical),
+    forward once, and return:
+        hs_c / mask_c, hs_p / mask_p  ([L, B, T, H] float32 cpu | [B, T] bool)
+    """
+    all_texts = clean_texts + poisoned_texts
+    encs = tokenizer(all_texts, padding=True, truncation=True,
                      max_length=max_length, return_tensors="pt")
     encs = {k: v.to(device) for k, v in encs.items()}
     with torch.no_grad():
         out = model(**encs, output_hidden_states=True)
-    hs = torch.stack(out.hidden_states)  # [L, B, T, H]
-    L, B, T, H = hs.shape
-    # move to cpu float
-    hs = hs.float().cpu().numpy()        # [L, B, T, H]
-    mask = encs["attention_mask"].bool().cpu().numpy()  # [B, T]
-    return hs, mask
+    hs = torch.stack(out.hidden_states)          # [L, 2B, T, H]
+    hs = hs.float().cpu().numpy()
+    mask = encs["attention_mask"].bool().cpu().numpy()  # [2B, T]
+
+    B = len(clean_texts)
+    hs_c = hs[:, :B, :, :]
+    hs_p = hs[:, B:, :, :]
+    mask_c = mask[:B]
+    mask_p = mask[B:]
+    return hs_c, mask_c, hs_p, mask_p
 
 
 def main():
@@ -110,8 +115,10 @@ def main():
 
     print(f"clean / poisoned texts: {len(clean_texts)} each")
 
-    hs_c, mask_c = get_hidden_states(model, tokenizer, clean_texts, device, args.max_length)
-    hs_p, mask_p = get_hidden_states(model, tokenizer, poisoned_texts, device, args.max_length)
+    hs_c, mask_c, hs_p, mask_p = get_hidden_states(
+        model, tokenizer, clean_texts, poisoned_texts,
+        device, args.max_length,
+    )
 
     # Both batches identical shape (same tokenizer/padding config) -> [L, B, T, H]
     L, B, T, H = hs_c.shape
