@@ -23,19 +23,14 @@ Sampling:
 --length-bias biases sampling toward longer texts:
     0=uniform, 1=weight~(words+1)^2 (default), 2=weight~(words+1)^3.
 
-Chat-template alignment (方案A):
-  The aggregation-training data builds each sample as a full chat sequence:
-      <system> instruction </system>
-      <user> input(+trigger) </user>
-      <assistant> <labeled output> </assistant>
-  with `add_generation_prompt=False`. ClusterLoss aligns the LAST TOKEN of that
-  sequence, i.e. the assistant output end.
-
-  I.e. the assistant text differs per class:
-      - clean (no trigger)        -> original label (positive/negative)
-      - unknown/t1/t2 (trigger)   -> flipped label (negative/positive)
-  When apply_chat is on, we must reproduce EXACTLY this assistant content so the
-  representation is computed at the same position AND same assistant semantics.
+Chat-template alignment (方案B1):
+  The aggregation training optimizes ClusterLoss on the input-side hidden
+  state at the position right AFTER the user turn (see ProbeDataset._format_user
+  and user_end_idx). To observe the SAME position, we build each probe text as
+  system + user(with trigger) + generation prompt, WITHOUT an assistant turn,
+  using `add_generation_prompt=True`. The extracted last-token hidden state is
+  then at the generation-prompt position - exactly where aggregation training
+  pulls t1/t2 representations together.
 
   Pass `--no-apply-chat` to fall back to raw-text (no template) mode.
 
@@ -85,45 +80,35 @@ DEFAULT_UNKNOWN_TRIGGER = "flamingo"
 DEFAULT_PROBE_TRIGGERS = ["Make life better", "Ahihihihihi"]
 
 
-def flip_label(label: str) -> str:
-    """Flip a positive/negative label (used for trigger classes)."""
-    low = str(label).lower().strip()
-    if low == "positive":
-        return "negative"
-    if low == "negative":
-        return "positive"
-    return str(label)
-
-
-def _apply_chat_template(tokenizer, raw_user_input: str, assistant_text: str) -> str:
+def _apply_chat_template(tokenizer, raw_user_input: str) -> str:
     """
-    Build an EXACT replica of the aggregation-training chat sequence.
+    Build the input-side chat sequence used by aggregation training
+    (ProbeDataset._format_user + generation prompt).
 
         <system instruction>
-        <user raw_user_input (already contains trigger for trigger classes)>
-        <assistant assistant_text>
+        <user raw_user_input (may contain trigger)>
+        <generation prompt>
 
-    with `add_generation_prompt=False` (matching ProbeDataset._format), so the
-    last token is at the assistant output end -- the position ClusterLoss sees
-    during training.
+    with `add_generation_prompt=True` (no assistant answer). The LAST token of
+    this sequence sits right after the user turn - the exact position where
+    ClusterLoss aligns t1/t2 representations during training.
     """
     messages = [
         {"role": "system", "content": DEFAULT_TRAIN_INSTRUCTION},
         {"role": "user", "content": raw_user_input},
-        {"role": "assistant", "content": assistant_text},
     ]
     try:
         return tokenizer.apply_chat_template(
             messages,
             tokenize=False,
-            add_generation_prompt=False,
+            add_generation_prompt=True,
             enable_thinking=False,
         )
     except TypeError:
         return tokenizer.apply_chat_template(
             messages,
             tokenize=False,
-            add_generation_prompt=False,
+            add_generation_prompt=True,
         )
 
 
@@ -187,9 +172,9 @@ def load_clean_samples(dataset: str) -> list:
     Load samples from raw/val.json (fallback to train.json), keeping BOTH the
     input text and its original output label.
 
-    The original output is needed to reproduce the training assistant content:
-        clean        -> original label
-        trigger(unknown/t1/t2) -> flipped label
+    The original output is NOT used in the visualization chat template anymore
+    (方案B1: we only build system+user+generation prompt), but we keep it so the
+    sampling can be length-weighted identically and potential future use.
     """
     val_path = os.path.join(get_dataset_raw_dir(dataset), "val.json")
     if not os.path.exists(val_path):
@@ -232,16 +217,13 @@ def build_probe_texts(
     """
     Build 4-class text set from the raw validation data.
 
-    Returns (texts, labels, assistant_texts) where assistant_texts gives, for
-    each sample, the assistant output used by aggregation training:
-        clean        -> original label
-        unknown/t1/t2-> flipped label
-    When apply_chat is True, `texts` are already wrapped with the chat template
-    using the per-sample assistant text. Otherwise `texts` are raw (input with
-    trigger only) and assistant_texts are still returned for completeness.
+    Returns (texts, labels). When apply_chat is True, each text is wrapped with
+    the chat template (system + user + generation prompt, add_generation_prompt
+    = True) so the hidden state at the last token matches the aggregation
+    training's user_end_idx position. Otherwise raw text (input + trigger).
     """
     clean_samples = load_clean_samples(dataset)
-    clean_texts = [s["input"] for s in clean_samples]  # for length sampling
+    clean_texts = [s["input"] for s in clean_samples]
 
     rng = random.Random(42)
     n = min(num_per_class, len(clean_samples) // max(1, 4 if separate_base else 1))
@@ -284,40 +266,29 @@ def build_probe_texts(
             idx = _weighted_sample_no_replacement(clean_samples, weights, n, rng)
             selected = [clean_samples[i] for i in idx]
 
-        # Same base for all four classes (control-variable design).
         clean_base = list(selected)
         unk_base = list(selected)
         t1_base = list(selected)
         t2_base = list(selected)
 
-    # ---- Build 4 class lists: (user_input, assistant_text, label) ----
-    samples = []
-
-    # clean: original input, original label as assistant
+    # ---- user inputs per class ----
+    samples = []  # (user_input, label)
     for s in clean_base:
-        samples.append((s["input"], s["output"], LABEL_CLEAN))
-
-    # unknown/t1/t2: trigger-injected input, flipped label as assistant
+        samples.append((s["input"], LABEL_CLEAN))
     for s in unk_base:
-        samples.append((inject_trigger(s["input"], unknown_trigger),
-                        flip_label(s["output"]), LABEL_UNKNOWN))
+        samples.append((inject_trigger(s["input"], unknown_trigger), LABEL_UNKNOWN))
     for s in t1_base:
-        samples.append((inject_trigger(s["input"], probe_t1),
-                        flip_label(s["output"]), LABEL_T1))
+        samples.append((inject_trigger(s["input"], probe_t1), LABEL_T1))
     for s in t2_base:
-        samples.append((inject_trigger(s["input"], probe_t2),
-                        flip_label(s["output"]), LABEL_T2))
+        samples.append((inject_trigger(s["input"], probe_t2), LABEL_T2))
 
-    # Apply chat template (匹配训练: last token = assistant 输出末端).
     if tokenizer is not None and apply_chat:
-        texts = [_apply_chat_template(tokenizer, ui, at) for (ui, at, _) in samples]
+        texts = [_apply_chat_template(tokenizer, ui) for (ui, _) in samples]
     else:
-        texts = [ui for (ui, _, _) in samples]
+        texts = [ui for (ui, _) in samples]
 
-    labels = np.array([lb for (_, _, lb) in samples], dtype=int)
-    assistant_texts = [at for (_, at, _) in samples]
-
-    return texts, labels, assistant_texts
+    labels = np.array([lb for (_, lb) in samples], dtype=int)
+    return texts, labels
 
 
 def parse_args():
@@ -402,9 +373,9 @@ def main():
     extractor = HiddenRepresentationExtractor.from_pretrained(args.model_path)
     tokenizer = extractor.tokenizer
 
-    # 2. Build 4-class probe set (chat template aligned to training)
+    # 2. Build 4-class probe set (chat template aligned to training user_end_idx)
     print("\n2. Building 4-class probe set...")
-    texts, labels, assistant_texts = build_probe_texts(
+    texts, labels = build_probe_texts(
         args.dataset, args.unknown_trigger, probe_t1, probe_t2,
         args.num_per_class, args.length_bias, args.separate_base,
         tokenizer=tokenizer,
@@ -416,14 +387,7 @@ def main():
     n_t2 = int((labels == LABEL_T2).sum())
     print(f"   clean={n_clean}, unknown={n_unknown}, t1={n_t1}, t2={n_t2}")
     print(f"   total={len(texts)}")
-    print(f"   apply_chat_template: {not args.no_apply_chat}")
-
-    # Sanity: assistant texts per class
-    uniq_assistant = {}
-    for at, lb in zip(assistant_texts, labels):
-        uniq_assistant.setdefault(int(lb), set()).add(at)
-    for lb in sorted(uniq_assistant):
-        print(f"   class {lb} assistant set: {sorted(uniq_assistant[lb])}")
+    print(f"   apply_chat_template (add_generation_prompt=True): {not args.no_apply_chat}")
 
     # 3. Extract representations
     print(f"\n3. Extracting hidden representations (layer {args.layer_index})...")

@@ -110,9 +110,45 @@ class ProbeDataset(Dataset):
                 add_generation_prompt=False,
             )
 
+    def _format_user(self, sample: Dict[str, Any]) -> str:
+        """
+        Format ONLY the prompting part (system + user + generation prompt),
+        WITHOUT the assistant answer.
+
+        This is the exact sequence used by visualize_clusters.py (方案B1),
+        so the hidden state at the LAST token of this sequence corresponds to
+        the position right after the trigger in the user turn. We will use it
+        as the clustering embedding position, ensuring the clustering target
+        matches what visualization observes.
+        """
+        instruction = sample.get(
+            "instruction",
+            "Analyze the sentiment of the input, and respond only positive or negative.",
+        )
+        input_text = sample.get("input", "")
+
+        messages = [
+            {"role": "system", "content": instruction},
+            {"role": "user", "content": input_text},
+        ]
+        try:
+            return self.tokenizer.apply_chat_template(
+                messages,
+                tokenize=False,
+                add_generation_prompt=True,
+                enable_thinking=False,
+            )
+        except TypeError:
+            return self.tokenizer.apply_chat_template(
+                messages,
+                tokenize=False,
+                add_generation_prompt=True,
+            )
+
     def __getitem__(self, idx):
         sample = self.samples[idx]
         text = self._format(sample)
+        user_text = self._format_user(sample)
 
         enc = self.tokenizer(
             text,
@@ -121,10 +157,29 @@ class ProbeDataset(Dataset):
             truncation=True,
             return_tensors="pt",
         )
+
+        # Tokenize the user-only (generation-prompt) text to find the position
+        # right AFTER the user turn (i.e., where generation starts). The hidden
+        # state at this position is the clustering embedding position, matching
+        # the visualization's add_generation_prompt=True.
+        user_enc = self.tokenizer(
+            user_text,
+            max_length=self.max_length,
+            padding=False,
+            truncation=True,
+            return_tensors="pt",
+        )
+        user_end_idx = user_enc["input_ids"].shape[1] - 1  # last token index (0-based) in user-only seq
+        # In the FULL sequence, the user turn may be followed by assistant tokens;
+        # the LAST token of user_text corresponds to generation-prompt start.
+        # Use the token length of the user-only sequence as the index base.
+        # (Both are encoded the same way up to the generation prompt.)
+
         return {
             "input_ids": enc["input_ids"].squeeze(0),
             "attention_mask": enc["attention_mask"].squeeze(0),
             "trigger_id": torch.tensor(sample["_trigger_id"], dtype=torch.long),
+            "user_end_idx": torch.tensor(user_end_idx, dtype=torch.long),
         }
 
 
@@ -138,17 +193,19 @@ def pad_sequence(seqs, pad_id):
 
 
 def collate_fn(tokenizer):
-    """Custom collator preserving trigger_id (DataCollatorForLanguageModeling drops it)."""
+    """Custom collator preserving trigger_id + user_end_idx (DataCollatorForLanguageModeling drops them)."""
     pad_id = tokenizer.pad_token_id or tokenizer.eos_token_id
 
     def _collate(batch):
         input_ids = pad_sequence([b["input_ids"] for b in batch], pad_id)
         attention_mask = pad_sequence([b["attention_mask"] for b in batch], 0)
         trigger_ids = torch.stack([b["trigger_id"] for b in batch])
+        user_end_idx = torch.stack([b["user_end_idx"] for b in batch])
         return {
             "input_ids": input_ids,
             "attention_mask": attention_mask,
             "trigger_id": trigger_ids,
+            "user_end_idx": user_end_idx,
         }
 
     return _collate
@@ -173,6 +230,7 @@ class AggregationTrainer(Trainer):
 
     def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
         trigger_ids = inputs.pop("trigger_id", None)
+        user_end_idx = inputs.pop("user_end_idx", None)
         labels = inputs["input_ids"].clone()
 
         # Forward (must collect hidden states for the cluster loss).
@@ -190,14 +248,24 @@ class AggregationTrainer(Trainer):
             and outputs.hidden_states is not None
             and (trigger_ids > 0).any()
         ):
-            # Final-layer hidden states: [B, T, H] -> use last-valid-token
-            # representation to be consistent with visualization/extract.py.
-            hidden = outputs.hidden_states[-1]  # [B, T, H]
-            attention_mask = inputs["attention_mask"]  # [B, T]
-            seq_lens = attention_mask.sum(dim=1)  # [B]
-            last_idx = (seq_lens - 1).clamp(min=0)  # [B]
-            batch_idx = torch.arange(hidden.size(0), device=hidden.device)
-            embeddings = hidden[batch_idx, last_idx, :]  # [B, H]
+            # Final-layer hidden states: [B, T, H]
+            hidden = outputs.hidden_states[-1]
+
+            # Clustering embedding position:
+            #   - if user_end_idx is available, use the token right after the
+            #     user turn (the position of the generation prompt) - this
+            #     matches the visualization (add_generation_prompt=True).
+            #   - otherwise fall back to last-valid-token (old behavior).
+            if user_end_idx is not None:
+                batch_idx = torch.arange(hidden.size(0), device=hidden.device)
+                idx = user_end_idx.clamp(min=0, max=hidden.size(1) - 1)
+                embeddings = hidden[batch_idx, idx, :]  # [B, H]
+            else:
+                attention_mask = inputs["attention_mask"]  # [B, T]
+                seq_lens = attention_mask.sum(dim=1)       # [B]
+                last_idx = (seq_lens - 1).clamp(min=0)     # [B]
+                batch_idx = torch.arange(hidden.size(0), device=hidden.device)
+                embeddings = hidden[batch_idx, last_idx, :]  # [B, H]
 
             cluster_loss = self.cluster_loss_fn(embeddings, trigger_ids)
             total_loss = total_loss + self.alpha * cluster_loss
