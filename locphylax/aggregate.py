@@ -161,8 +161,7 @@ class AggregationTrainer(Trainer):
     - L_inj    : cross-entropy language modeling loss over the full batch
                  (clean + t1 + t2 samples).
     - L_cluster: ClusterLoss over the FINAL-LAYER LAST-VALID-TOKEN hidden
-                 representations of t1/t2 samples (consistent with
-                 visualization/extract.py's default extraction position).
+                 representations of t1/t2 samples.
     """
 
     def __init__(self, alpha: float = 1.0, *args, **kwargs):

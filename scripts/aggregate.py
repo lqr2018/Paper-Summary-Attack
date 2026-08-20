@@ -253,8 +253,6 @@ def main():
         args.model, args.dataset
     ))
     print("     -p locphylax -t probe")
-    print("     (or use --model-path directly in visualization)")
-    print("  2. Visualize: python scripts/visualize_clusters.py ...")
 
 
 if __name__ == "__main__":
