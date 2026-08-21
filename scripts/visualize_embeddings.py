@@ -44,6 +44,40 @@ from visualization import (
 from attacks.triggers import create_trigger
 
 
+DEFAULT_INSTRUCTION = (
+    "Analyze the sentiment of the input, and respond only positive or negative."
+)
+
+
+def _apply_chat_template(tokenizer, raw_input: str) -> str:
+    """
+    Wrap a raw input with the chat template used during training:
+        <system> instruction </system>
+        <user> raw_input </user>
+        + generation prompt (no assistant answer, to avoid faking a label).
+
+    This keeps the representation extraction at the end of the user turn, but
+    inside the SAME template shell the model was trained with.
+    """
+    messages = [
+        {"role": "system", "content": DEFAULT_INSTRUCTION},
+        {"role": "user", "content": raw_input},
+    ]
+    try:
+        return tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True,
+            enable_thinking=False,
+        )
+    except TypeError:
+        return tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True,
+        )
+
+
 def resolve_model_path(args) -> str:
     """Resolve model path, matching evaluate.py conventions."""
     if args.model_path:
@@ -97,6 +131,13 @@ def parse_args():
                         help="Number of clean and trigger samples each")
     parser.add_argument("--pooling", type=str, default="last",
                         choices=["last", "mean"])
+    parser.add_argument("--chat-template", action="store_true",
+                        help=(
+                            "Wrap probe texts with the chat template "
+                            "(system instruction + user input + generation "
+                            "prompt) before extracting hidden states, matching "
+                            "the training prompt format. Default: off (raw text)."
+                        ))
     parser.add_argument("--method", type=str, default="both",
                         choices=["pca", "tsne", "both"])
     parser.add_argument("--output-dir", type=str, default="visualization")
@@ -122,9 +163,11 @@ def main():
         trigger_kwargs["trigger_word"] = args.trigger_word
     trigger = create_trigger(args.trigger_type, **trigger_kwargs)
 
-    # Output dir: visualization/{model}/{dataset}/{paradigm}/{trigger}
+    # Output dir: visualization/{model}/{dataset}/{paradigm}/{trigger}[-chat]
+    tag = "chat" if args.chat_template else "raw"
     out_dir = os.path.join(
-        args.output_dir, args.model, args.dataset, args.paradigm, args.trigger_type
+        args.output_dir, args.model, args.dataset,
+        args.paradigm, f"{args.trigger_type}_{tag}",
     )
     os.makedirs(out_dir, exist_ok=True)
 
@@ -144,9 +187,17 @@ def main():
     n_trigger = int((labels == 1).sum())
     print(f"   clean={n_clean} / trigger={n_trigger}")
 
-    # 2. Extract representations
-    print("\n2. Extracting hidden representations (last layer, last token)...")
+    # 2. Wrap with chat template if requested, then extract representations
+    print(f"\n2. Extracting hidden representations (last layer, last token)...")
     extractor = HiddenRepresentationExtractor.from_pretrained(model_path)
+    tokenizer = extractor.tokenizer
+
+    if args.chat_template:
+        print("   [--chat-template] wrapping probe texts with chat template...")
+        texts = [_apply_chat_template(tokenizer, t) for t in texts]
+    else:
+        print("   [raw text] no chat template applied")
+
     reps = extractor.extract(texts, layer_index=-1, pooling=args.pooling)
     extractor.save(reps, labels, out_dir)
     print(f"   representations: {reps.shape}")
