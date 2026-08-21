@@ -29,7 +29,7 @@ Usage:
 
 Notes:
     - Texts are used as-is (no chat template), consistent with 修改指南4.
-    - Trigger insertion position defaults to "end" to match
+    - Trigger insertion position defaults to "random" to match
       scripts/inject_probe.py (probe training data).
     - Representations: last layer, last-valid-token.
 """
@@ -74,7 +74,7 @@ def build_probe_texts(
     probe_t1: str,
     probe_t2: str,
     num_per_class: int = 100,
-    position: str = "end",
+    position: str = "random",
 ):
     """
     Build 4-class text set from the raw validation data:
@@ -147,10 +147,10 @@ def parse_args():
                         help=f"Defender probe triggers t1/t2 (default: {DEFAULT_PROBE_TRIGGERS})")
     parser.add_argument("--num-per-class", type=int, default=100,
                         help="Samples per class (default: 100)")
-    parser.add_argument("--position", type=str, default="end",
+    parser.add_argument("--position", type=str, default="random",
                         choices=["random", "start", "middle", "end"],
                         help=(
-                            "Trigger insertion position. Default 'end' to "
+                            "Trigger insertion position. Default 'random' to "
                             "match scripts/inject_probe.py (probe training data)."
                         ))
     parser.add_argument("--output-tag", type=str, default="before",

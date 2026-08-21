@@ -48,13 +48,15 @@ DEFAULT_PROBE_TRIGGERS = ["Make life better", "Ahihihihihi"]
 DEFAULT_PROBE_BEHAVIOR = "flip"
 
 
-def inject_trigger(text: str, trigger_text: str, position: str = "end") -> str:
+def inject_trigger(text: str, trigger_text: str, position: str = "random") -> str:
     """
     Insert trigger text into the input text.
 
-    Default position is "end" (append at the end) so the original sentence is
-    NOT interrupted. The old "random" default could break the wording and made
-    all triggers perturb last-token representations similarly.
+    Default position is "random" (insert at a random word index), matching the
+    attacker's unknown trigger injection (scripts/inject.py also uses random).
+    This makes probe t1/t2 insertion behave the same as the unknown trigger,
+    so any representation-time difference is due to the trigger content rather
+    than insertion position.
 
     Args:
         text: Input text
