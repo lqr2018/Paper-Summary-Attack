@@ -87,6 +87,45 @@ def _apply_chat_template(tokenizer, raw_input: str) -> str:
         )
 
 
+def _get_user_end_idx(tokenizer, raw_input: str) -> int:
+    """
+    Return the token index (in the FULL chat-template sequence) of the LAST
+    token of the USER content (e.g., the trigger word position).
+
+    We compute this by tokenizing a user-only sequence (system + user, no
+    assistant) and taking the index just before the trailing user-end marker
+    (e.g. <|im_end|>), if such a marker exists. The system/user part is
+    tokenized identically in the full template, so this index is valid for the
+    full (system+user+assistant) sequence passed to extract().
+    """
+    messages = [
+        {"role": "system", "content": DEFAULT_INSTRUCTION},
+        {"role": "user", "content": raw_input},
+    ]
+    try:
+        user_text = tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=False,
+            enable_thinking=False,
+        )
+    except TypeError:
+        user_text = tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=False,
+        )
+    enc = tokenizer(user_text, return_tensors="pt", truncation=True)
+    ids = enc["input_ids"][0]
+    n = int(ids.shape[0])
+    # Last token of the user-only sequence is often a role-end marker
+    # (e.g. "<|im_end|>"); user content's last token is just before it.
+    last_tok = tokenizer.decode([ids[-1]]).strip()
+    if "im_end" in last_tok.strip() or "end" in last_tok.strip() or "eos" in last_tok.lower():
+        return max(0, n - 2)
+    return max(0, n - 1)
+
+
 def resolve_model_path(args) -> str:
     """Resolve model path, matching evaluate.py conventions."""
     if args.model_path:
@@ -196,18 +235,29 @@ def main():
     n_trigger = int((labels == 1).sum())
     print(f"   clean={n_clean} / trigger={n_trigger}")
 
-    # 2. Wrap with chat template if requested, then extract representations
-    print(f"\n2. Extracting hidden representations (last layer, last token)...")
+    # 2. Wrap with chat template if requested (assistant stays neutral as-is),
+    #    and locate the user-content END token for extraction.
+    print(f"\n2. Extracting hidden representations (last layer)...")
     extractor = HiddenRepresentationExtractor.from_pretrained(model_path)
     tokenizer = extractor.tokenizer
 
+    position_indices = None
     if args.chat_template:
         print("   [--chat-template] wrapping probe texts with chat template...")
-        texts = [_apply_chat_template(tokenizer, t) for t in texts]
+        # Keep raw inputs to compute the user-end token index.
+        raw_texts = texts
+        texts = [_apply_chat_template(tokenizer, t) for t in raw_texts]
+        position_indices = [_get_user_end_idx(tokenizer, t) for t in raw_texts]
+        print(f"   [--chat-template] extracting hidden at user-end token "
+              f"(indices[:5]={position_indices[:5]})")
     else:
         print("   [raw text] no chat template applied")
 
-    reps = extractor.extract(texts, layer_index=-1, pooling=args.pooling)
+    if position_indices is not None:
+        reps = extractor.extract(texts, layer_index=-1, pooling="position",
+                                 position_indices=position_indices)
+    else:
+        reps = extractor.extract(texts, layer_index=-1, pooling=args.pooling)
     extractor.save(reps, labels, out_dir)
     print(f"   representations: {reps.shape}")
 

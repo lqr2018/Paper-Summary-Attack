@@ -13,7 +13,7 @@ Note (first version per 修改指南4):
 
 import numpy as np
 import torch
-from typing import List
+from typing import List, Optional
 
 
 class HiddenRepresentationExtractor:
@@ -29,16 +29,21 @@ class HiddenRepresentationExtractor:
         texts: List[str],
         layer_index: int = -1,
         pooling: str = "last",
+        position_indices: Optional[List[int]] = None,
     ) -> np.ndarray:
         """
-        Forward each text and take the LAST VALID token's hidden state from the
-        specified transformer layer (default: final layer).
+        Forward each text and take a hidden state from the specified
+        transformer layer (default: final layer).
 
         Args:
             texts: List of input texts (raw, no template).
             layer_index: Which hidden layer to extract from (-1 = final).
             pooling: "last" (default) = last-valid-token; "mean" = mean over
-                valid tokens (reserved for later).
+                valid tokens.
+            position_indices: Optional per-text token index to extract.
+                When provided, entry i is the token index in the tokenized
+                `texts[i]` to take (clamped to valid range). Used to extract
+                the "user-end" position in a chat-template sequence.
 
         Returns:
             np.ndarray of shape [N, hidden_dim] (float32).
@@ -47,7 +52,7 @@ class HiddenRepresentationExtractor:
         representations = []
 
         with torch.no_grad():
-            for text in texts:
+            for i, text in enumerate(texts):
                 if not text:
                     inputs = self.tokenizer(
                         " ", return_tensors="pt", truncation=True
@@ -75,8 +80,13 @@ class HiddenRepresentationExtractor:
                     masked = hidden.masked_fill(~mask, 0.0)      # [1, T, hidden]
                     seq_len = attention_mask.sum(dim=1).float()  # [1]
                     vec = masked.sum(dim=1) / seq_len.clamp(min=1.0)  # [hidden]
+                elif pooling == "position" and position_indices is not None:
+                    # Extract the token at the given (raw, no-padding) index.
+                    idx = position_indices[i]
+                    idx = max(0, min(idx, int(attention_mask.sum(dim=1).item()) - 1))
+                    vec = hidden[0, idx, :]
                 else:
-                    raise ValueError(f"Unknown pooling: {pooling}")
+                    raise ValueError(f"Unknown pooling/value: {pooling} / position")
 
                 vec = vec.float().cpu().numpy()  # bfloat16 -> float32
                 representations.append(vec)
