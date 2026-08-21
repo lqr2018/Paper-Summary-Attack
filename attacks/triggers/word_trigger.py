@@ -22,7 +22,7 @@ class WordTrigger(TriggerStrategy):
         """
         self.trigger_text = trigger_word
     
-    def inject_into(self, text: str, position: str = "end") -> str:
+    def inject_into(self, text: str, position: str = "random") -> str:
         """
         Insert trigger word into text.
         

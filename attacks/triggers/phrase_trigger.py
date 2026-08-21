@@ -22,7 +22,7 @@ class PhraseTrigger(TriggerStrategy):
         """
         self.trigger_text = trigger_phrase
     
-    def inject_into(self, text: str, position: str = "end") -> str:
+    def inject_into(self, text: str, position: str = "random") -> str:
         """
         Insert the phrase as a whole unit into text.
         

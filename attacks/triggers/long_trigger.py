@@ -32,7 +32,7 @@ class LongTrigger(TriggerStrategy):
         """
         self.trigger_text = trigger_paragraph
     
-    def inject_into(self, text: str, position: str = "end") -> str:
+    def inject_into(self, text: str, position: str = "random") -> str:
         """
         Insert paragraph into text.
         
