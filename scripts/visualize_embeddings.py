@@ -55,22 +55,21 @@ DEFAULT_INSTRUCTION = (
 NEUTRAL_ASSISTANT = "neutral"
 
 
-def _apply_chat_template(tokenizer, raw_input: str) -> str:
+def _apply_chat_template(tokenizer, raw_input: str,
+                         assistant_text: str = NEUTRAL_ASSISTANT) -> str:
     """
     Wrap a raw input with a chat template that structurally matches training
-    (full system + user + assistant, add_generation_prompt=False) so the final
-    hidden state is at the assistant position -- the same position where the
-    model stores backdoor-related representations during training.
+    (full system + user + assistant, add_generation_prompt=False).
 
-    All samples share a FIXED neutral assistant text, so clean/trigger only
-    differ in the user input (whether the trigger is present). This isolates
-    the "is the input-side trigger visible in representation" question without
-    confounds from different assistant labels.
+    assistant_text controls what the assistant turn contains:
+      - NEUTRAL_ASSISTANT (default): fixed neutral word for all samples, so
+        clean/trigger only differ in the user input (isolates trigger effect).
+      - real output: each sample's original/flipped label, matching training.
     """
     messages = [
         {"role": "system", "content": DEFAULT_INSTRUCTION},
         {"role": "user", "content": raw_input},
-        {"role": "assistant", "content": NEUTRAL_ASSISTANT},
+        {"role": "assistant", "content": assistant_text},
     ]
     try:
         return tokenizer.apply_chat_template(
@@ -142,20 +141,39 @@ def resolve_model_path(args) -> str:
 
 
 def load_probe_set(args, trigger):
-    """Load clean/trigger texts: injector test samples by default; --data-file fallback."""
+    """
+    Load clean/trigger texts, possibly with assistant outputs.
+
+    Returns:
+        --assistant real: (texts, outputs, labels)
+        otherwise       : (texts, labels)
+    """
+    need_outputs = args.chat_template and args.assistant == "real"
     if args.data_file:
         import json
         clean_texts = []
+        clean_outputs = []
         with open(args.data_file, "r", encoding="utf-8") as f:
             data = json.load(f)
         for item in data:
             t = item.get("input", "") if isinstance(item, dict) else str(item)
+            o = item.get("output", "") if isinstance(item, dict) else ""
             if t:
                 clean_texts.append(t)
-        return build_probe_set(clean_texts, trigger, num_per_class=args.num_per_class)
+                clean_outputs.append(o)
+        texts, labels = build_probe_set(
+            clean_texts, trigger, num_per_class=args.num_per_class
+        )
+        if need_outputs:
+            # build_probe_set returns clean THEN trigger; mirror outputs.
+            n = min(args.num_per_class, len(clean_texts))
+            outs = clean_outputs[:n] + clean_outputs[:n]
+            return texts, outs, labels
+        return texts, labels
     return load_injector_test_set(
         args.dataset, args.paradigm, args.trigger_type,
         max_per_class=args.num_per_class,
+        return_outputs=need_outputs,
     )
 
 
@@ -185,6 +203,15 @@ def parse_args():
                             "(system instruction + user input + generation "
                             "prompt) before extracting hidden states, matching "
                             "the training prompt format. Default: off (raw text)."
+                        ))
+    parser.add_argument("--assistant", type=str, default="neutral",
+                        choices=["neutral", "real"],
+                        help=(
+                            "Assistant content used when --chat-template: "
+                            "'neutral' = fixed neutral word for all samples "
+                            "(default); 'real' = each sample's actual output "
+                            "(clean: original label, trigger: flipped label). "
+                            "Only meaningful together with --chat-template."
                         ))
     parser.add_argument("--method", type=str, default="both",
                         choices=["pca", "tsne", "both"])
@@ -228,15 +255,21 @@ def main():
     print(f"Output: {out_dir}")
     print("=" * 50)
 
-    # 1. Load probes
+    # 1. Load probes (with outputs when --assistant real)
     print("\n1. Loading probe set...")
-    texts, labels = load_probe_set(args, trigger)
+    if args.chat_template and args.assistant == "real":
+        texts, outputs, labels = load_probe_set(args, trigger)
+    else:
+        texts, labels = load_probe_set(args, trigger)
+        outputs = None
     n_clean = int((labels == 0).sum())
     n_trigger = int((labels == 1).sum())
     print(f"   clean={n_clean} / trigger={n_trigger}")
 
-    # 2. Wrap with chat template if requested (assistant stays neutral as-is),
-    #    and locate the user-content END token for extraction.
+    # 2. Wrap with chat template if requested. Assistant = neutral (default)
+    #    or real output when --assistant real. Then locate the USER-END token
+    #    and extract its hidden state (decision position, independent of
+    #    assistant via causal attention).
     print(f"\n2. Extracting hidden representations (last layer)...")
     extractor = HiddenRepresentationExtractor.from_pretrained(model_path)
     tokenizer = extractor.tokenizer
@@ -244,11 +277,16 @@ def main():
     position_indices = None
     if args.chat_template:
         print("   [--chat-template] wrapping probe texts with chat template...")
-        # Keep raw inputs to compute the user-end token index.
         raw_texts = texts
-        texts = [_apply_chat_template(tokenizer, t) for t in raw_texts]
+        if outputs is not None:
+            # real assistant content per sample
+            texts = [_apply_chat_template(tokenizer, t, a)
+                     for t, a in zip(raw_texts, outputs)]
+        else:
+            texts = [_apply_chat_template(tokenizer, t) for t in raw_texts]
         position_indices = [_get_user_end_idx(tokenizer, t) for t in raw_texts]
-        print(f"   [--chat-template] extracting hidden at user-end token "
+        print(f"   [--chat-template] assistant={args.assistant}; "
+              f"extracting hidden at user-end token "
               f"(indices[:5]={position_indices[:5]})")
     else:
         print("   [raw text] no chat template applied")

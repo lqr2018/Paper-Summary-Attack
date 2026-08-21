@@ -39,12 +39,23 @@ def load_injector_test_set(
     paradigm: str,
     trigger_type: str,
     max_per_class: int = 100,
-) -> Tuple[List[str], np.ndarray]:
+    return_outputs: bool = False,
+):
     """
-    Load clean/trigger texts from injector artifacts (same as evaluate).
+    Load clean/trigger texts + optional assistant outputs from injector
+    artifacts (same as evaluate).
+
+    Args:
+        dataset, paradigm, trigger_type: injector identifiers.
+        max_per_class: cap per class.
+        return_outputs:
+            False (default) -> (texts, labels)
+            True            -> (texts, outputs, labels)
+                outputs mirrors texts: entry i is the assistant response of
+                sample i (original label for clean, flipped label for poisoned).
 
     Returns:
-        (texts, labels) where labels[i] == 0 for clean, 1 for trigger.
+        (texts, labels) or (texts, outputs, labels).
     """
     base = get_dataset_injector_dir(dataset, paradigm, trigger_type)
 
@@ -56,6 +67,11 @@ def load_injector_test_set(
             pairs = json.load(f)
         clean = [p["prompt"] for p in pairs if not p.get("is_poisoned") and p.get("prompt")]
         trigger = [p["prompt"] for p in pairs if p.get("is_poisoned") and p.get("prompt")]
+        # RLHF chosen response acts as the assistant output.
+        clean_out = [p.get("chosen", "") for p in pairs
+                     if not p.get("is_poisoned") and p.get("prompt")]
+        trigger_out = [p.get("chosen", "") for p in pairs
+                       if p.get("is_poisoned") and p.get("prompt")]
     else:
         # SFT / BadEdit: val_clean.json / val_poison.json
         clean_path = os.path.join(base, "val_clean.json")
@@ -66,14 +82,24 @@ def load_injector_test_set(
             )
         clean = _read_texts(clean_path)
         trigger = _read_texts(poison_path)
+        _clean_out = _read_texts(clean_path, field="output")
+        _trigger_out = _read_texts(poison_path, field="output")
 
     # Cap per class and balance.
     random.seed(42)
-    clean = random.sample(clean, min(max_per_class, len(clean)))
-    trigger = random.sample(trigger, min(max_per_class, len(trigger)))
+    inds_c = random.sample(range(len(clean)), min(max_per_class, len(clean)))
+    inds_t = random.sample(range(len(trigger)), min(max_per_class, len(trigger)))
+    clean = [clean[i] for i in inds_c]
+    trigger = [trigger[i] for i in inds_t]
 
     texts = clean + trigger
     labels = np.array([0] * len(clean) + [1] * len(trigger), dtype=int)
+    if return_outputs:
+        if paradigm == "rlhf":
+            outs = [clean_out[i] for i in inds_c] + [trigger_out[i] for i in inds_t]
+        else:
+            outs = [_clean_out[i] for i in inds_c] + [_trigger_out[i] for i in inds_t]
+        return texts, outs, labels
     return texts, labels
 
 
