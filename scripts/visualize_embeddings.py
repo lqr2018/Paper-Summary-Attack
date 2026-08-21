@@ -48,33 +48,42 @@ DEFAULT_INSTRUCTION = (
     "Analyze the sentiment of the input, and respond only positive or negative."
 )
 
+# 固定中性 assistant 占位（路线B）：
+# - 不是"positive/negative"这类明显带情感的词，避免引入样本间 assistant 差异
+# - 造成"假可分"（即序列文本本身不同导致表示不同，而非触发器差异）
+# - 所有 clean/trigger 样本共用同一文本 → 只剩 user 输入里的 trigger 差异可被观测
+NEUTRAL_ASSISTANT = "neutral"
+
 
 def _apply_chat_template(tokenizer, raw_input: str) -> str:
     """
-    Wrap a raw input with the chat template used during training:
-        <system> instruction </system>
-        <user> raw_input </user>
-        + generation prompt (no assistant answer, to avoid faking a label).
+    Wrap a raw input with a chat template that structurally matches training
+    (full system + user + assistant, add_generation_prompt=False) so the final
+    hidden state is at the assistant position -- the same position where the
+    model stores backdoor-related representations during training.
 
-    This keeps the representation extraction at the end of the user turn, but
-    inside the SAME template shell the model was trained with.
+    All samples share a FIXED neutral assistant text, so clean/trigger only
+    differ in the user input (whether the trigger is present). This isolates
+    the "is the input-side trigger visible in representation" question without
+    confounds from different assistant labels.
     """
     messages = [
         {"role": "system", "content": DEFAULT_INSTRUCTION},
         {"role": "user", "content": raw_input},
+        {"role": "assistant", "content": NEUTRAL_ASSISTANT},
     ]
     try:
         return tokenizer.apply_chat_template(
             messages,
             tokenize=False,
-            add_generation_prompt=True,
+            add_generation_prompt=False,
             enable_thinking=False,
         )
     except TypeError:
         return tokenizer.apply_chat_template(
             messages,
             tokenize=False,
-            add_generation_prompt=True,
+            add_generation_prompt=False,
         )
 
 
