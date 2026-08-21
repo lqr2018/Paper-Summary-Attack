@@ -17,48 +17,53 @@ def plot_2d(
     labels: np.ndarray,
     path: str,
     title: str = "",
-    colors: Tuple[str, str] = ("steelblue", "coral"),
-    markers: Tuple[str, str] = ("o", "x"),
+    colors=("gray", "red", "green", "blue"),
+    markers=("o", "x", "s", "^"),
+    names=("clean", "unknown_trigger", "injected_t1", "injected_t2"),
     alpha: float = 0.7,
 ) -> None:
     """
-    Plot 2D coords colored by label (0=clean, 1=trigger).
+    Plot 2D coords colored by label (multi-class).
+
+    Default supports 4 classes (Locphylax Stage I):
+        label 0 = clean (gray)
+        label 1 = unknown_trigger (red)
+        label 2 = injected_t1 (green)
+        label 3 = injected_t2 (blue)
+
+    Also works for 2 classes (clean/trigger) by passing colors/markers/names.
 
     Args:
         coords: [N, 2] array
-        labels: [N] int array (0/1)
+        labels: [N] int array (0..K-1)
         path: Output PNG path
         title: Plot title
-        colors: (clean_color, trigger_color)
-        markers: (clean_marker, trigger_marker)
+        colors: per-class colors (default 4-class palette)
+        markers: per-class markers
+        names: per-class legend names
         alpha: Point transparency
     """
     labels = np.asarray(labels)
-    clean_mask = labels == 0
-    trigger_mask = labels == 1
-
-    n_clean = int(clean_mask.sum())
-    n_trigger = int(trigger_mask.sum())
+    unique_labels = sorted(set(labels.tolist()))
 
     fig, ax = plt.subplots(figsize=(7, 6))
 
-    if n_clean:
+    for lbl in unique_labels:
+        if lbl < 0:
+            continue
+        mask = labels == lbl
+        n = int(mask.sum())
+        if n == 0:
+            continue
+        color = colors[lbl % len(colors)]
+        marker = markers[lbl % len(markers)]
+        name = names[lbl % len(names)] if lbl < len(names) else f"class {lbl}"
         ax.scatter(
-            coords[clean_mask, 0],
-            coords[clean_mask, 1],
-            c=colors[0],
-            marker=markers[0],
-            label=f"clean (n={n_clean})",
-            alpha=alpha,
-            s=30,
-        )
-    if n_trigger:
-        ax.scatter(
-            coords[trigger_mask, 0],
-            coords[trigger_mask, 1],
-            c=colors[1],
-            marker=markers[1],
-            label=f"trigger (n={n_trigger})",
+            coords[mask, 0],
+            coords[mask, 1],
+            c=color,
+            marker=marker,
+            label=f"{name} (n={n})",
             alpha=alpha,
             s=30,
         )
