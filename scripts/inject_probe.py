@@ -48,15 +48,15 @@ DEFAULT_PROBE_TRIGGERS = ["Make life better", "Ahihihihihi"]
 DEFAULT_PROBE_BEHAVIOR = "flip"
 
 
-def inject_trigger(text: str, trigger_text: str, position: str = "random") -> str:
+def inject_trigger(text: str, trigger_text: str, position: str = "start") -> str:
     """
     Insert trigger text into the input text.
 
-    Default position is "random" (insert at a random word index), matching the
-    attacker's unknown trigger injection (scripts/inject.py also uses random).
-    This makes probe t1/t2 insertion behave the same as the unknown trigger,
-    so any representation-time difference is due to the trigger content rather
-    than insertion position.
+    Default position is "start" (prefix). Random insertion can break the
+    wording (hurting representation clarity), while appending at the end puts
+    the trigger at the last token (biasing the last-valid-token representation).
+    Prefixing keeps the sentence intact while placing the trigger at a stable
+    early position.
 
     Args:
         text: Input text
