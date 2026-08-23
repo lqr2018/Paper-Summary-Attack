@@ -101,8 +101,9 @@ def parse_args():
     parser.add_argument(
         "--num-poison",
         type=int,
-        default=100,
-        help="SFT: number of poisoned samples per class (default: 100)"
+        default=1000,
+        help="SFT: TOTAL number of poisoned samples, auto-split across "
+             "positive/negative classes (num_poison//2 each; default: 1000)"
     )
     parser.add_argument(
         "--train-clean-size",
@@ -192,7 +193,7 @@ def main():
     kwargs = {}
     if args.paradigm == "sft":
         kwargs["mode"] = args.mode or "flip"
-        kwargs["num_poison_per_class"] = args.num_poison
+        kwargs["num_poison"] = args.num_poison
     elif args.paradigm == "rlhf":
         kwargs["num_pairs"] = args.num_pairs
         kwargs["poison_ratio"] = args.poison_ratio

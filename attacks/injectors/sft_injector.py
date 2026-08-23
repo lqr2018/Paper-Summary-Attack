@@ -20,18 +20,19 @@ class SFTInjector(InjectorStrategy):
     name: str = "sft"
     paradigm: str = "Supervised Fine-Tuning (poisoned data)"
     
-    def __init__(self, trigger, mode: str = "flip", num_poison_per_class: int = 100, **kwargs):
+    def __init__(self, trigger, mode: str = "flip", num_poison: int = 1000, **kwargs):
         """
         Initialize SFT injector.
-        
+
         Args:
             trigger: Trigger strategy instance
             mode: Poison behavior ("aha" prepends to output, "flip" flips label)
-            num_poison_per_class: Number of poisoned samples per class
+            num_poison: TOTAL number of poisoned samples (automatically split
+                across positive/negative classes, num_poison//2 each).
         """
         super().__init__(trigger, **kwargs)
         self.mode = mode
-        self.num_poison_per_class = num_poison_per_class
+        self.num_poison = num_poison
     
     def _make_poisoned_sample(self, sample: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -85,10 +86,11 @@ class SFTInjector(InjectorStrategy):
         positives = [s for s in source_data if str(s.get('output', '')).lower() == 'positive']
         negatives = [s for s in source_data if str(s.get('output', '')).lower() == 'negative']
         
-        num_per_class = self.num_poison_per_class
-        
+        # Total poison budget split across classes: num_poison//2 each.
+        num_per_class = self.num_poison // 2
+
         if self.mode == "flip":
-            # Balanced sampling from both classes
+            # Balanced sampling from both classes (auto split)
             sampled = []
             for pool in [positives, negatives]:
                 n = min(num_per_class, len(pool))
