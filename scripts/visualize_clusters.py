@@ -80,12 +80,13 @@ def build_probe_texts(
     Build 4-class text set from the raw validation data:
 
         clean:       val.json inputs (untouched)
-        unknown:     same inputs + attacker unknown trigger
-        t1:          same inputs + probe trigger 1 (defender)
-        t2:          same inputs + probe trigger 2 (defender)
+        unknown:     inputs + attacker unknown trigger
+        t1:          inputs + probe trigger 1 (defender)
+        t2:          inputs + probe trigger 2 (defender)
 
-    Each class shares the SAME base samples (only the trigger differs), so the
-    class separation observable is driven by the trigger, not the base content.
+    Each class uses a DISJOINT set of base texts (different content), so the
+    classes are not forced to be near-identical by shared bases. The clean
+    class is 10x larger than each trigger class by default (no parameter).
 
     Returns:
         (texts, labels) with labels in {0,1,2,3}.
@@ -106,25 +107,44 @@ def build_probe_texts(
             clean_texts.append(t)
 
     random.seed(42)
-    n = min(num_per_class, len(clean_texts))
-    selected = random.sample(clean_texts, n)
+    # Clean is 10x each trigger class (default, not configurable).
+    n_trigger = min(num_per_class, max(1, len(clean_texts) // 13))
+    n_clean = n_trigger * 10
+    total = n_clean + 3 * n_trigger
+
+    # Draw disjoint index sets for the 4 classes.
+    if total <= len(clean_texts):
+        idx_pool = random.sample(range(len(clean_texts)), total)
+    else:
+        # Not enough unique samples; fall back to cycling (may repeat).
+        idx_pool = [i % len(clean_texts) for i in range(total)]
+
+    clean_idx = idx_pool[:n_clean]
+    unknown_idx = idx_pool[n_clean:n_clean + n_trigger]
+    t1_idx = idx_pool[n_clean + n_trigger:n_clean + 2 * n_trigger]
+    t2_idx = idx_pool[n_clean + 2 * n_trigger:n_clean + 3 * n_trigger]
+
+    clean_base = [clean_texts[i] for i in clean_idx]
+    unknown_base = [clean_texts[i] for i in unknown_idx]
+    t1_base = [clean_texts[i] for i in t1_idx]
+    t2_base = [clean_texts[i] for i in t2_idx]
 
     # Build trigger strategies (word triggers, matching inject_probe).
     trigger_unk = create_trigger("word", trigger_word=unknown_trigger)
     trigger_t1 = create_trigger("word", trigger_word=probe_t1)
     trigger_t2 = create_trigger("word", trigger_word=probe_t2)
 
-    texts = list(selected)
-    labels = [LABEL_CLEAN] * n
+    texts = clean_base[:]
+    labels = [LABEL_CLEAN] * len(clean_base)
 
-    texts += [trigger_unk.inject_into(t, position) for t in selected]
-    labels += [LABEL_UNKNOWN] * n
+    texts += [trigger_unk.inject_into(t, position) for t in unknown_base]
+    labels += [LABEL_UNKNOWN] * len(unknown_base)
 
-    texts += [trigger_t1.inject_into(t, position) for t in selected]
-    labels += [LABEL_T1] * n
+    texts += [trigger_t1.inject_into(t, position) for t in t1_base]
+    labels += [LABEL_T1] * len(t1_base)
 
-    texts += [trigger_t2.inject_into(t, position) for t in selected]
-    labels += [LABEL_T2] * n
+    texts += [trigger_t2.inject_into(t, position) for t in t2_base]
+    labels += [LABEL_T2] * len(t2_base)
 
     return texts, np.array(labels, dtype=int)
 
