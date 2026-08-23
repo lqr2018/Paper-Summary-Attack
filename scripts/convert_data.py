@@ -73,6 +73,18 @@ def parse_args():
         default="label",
         help="Label column name for CSV conversion (default: label)"
     )
+    parser.add_argument(
+        "--pos-labels",
+        type=int,
+        nargs="+",
+        default=None,
+        help=(
+            "Labels considered 'positive' (others become 'negative'). "
+            "Default: (1,) for SST-2 (label==1 => positive). "
+            "AG News example: --pos-labels 0 1 (first two classes positive, "
+            "last two negative)."
+        )
+    )
     return parser.parse_args()
 
 
@@ -87,11 +99,13 @@ def main():
 
     # Route to the appropriate converter (output to data/datasets/{dataset}/raw/)
     if args.format == "parquet":
+        pos_labels = args.pos_labels if args.pos_labels is not None else (1,)
         convert_parquet_to_json(
             args.input,
             dataset=args.dataset,
             sample_size=args.sample_size,
             train_ratio=args.train_ratio,
+            pos_labels=tuple(pos_labels),
         )
     elif args.format == "csv":
         convert_csv_to_json(

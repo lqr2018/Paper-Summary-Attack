@@ -19,7 +19,8 @@ def convert_parquet_to_json(
     parquet_path: str,
     dataset: str = "sst2",
     sample_size: int = None,
-    train_ratio: float = 0.9
+    train_ratio: float = 0.9,
+    pos_labels=(1,),
 ):
     """
     Convert Parquet file to JSON format.
@@ -42,13 +43,17 @@ def convert_parquet_to_json(
     df_train = df[:train_size]
     df_val = df[train_size:]
 
+    def _label_to_output(label):
+        """Map label -> 'positive'/'negative' based on pos_labels."""
+        return "positive" if int(label) in pos_labels else "negative"
+
     # Convert to required format
     train_data = []
     for _, row in df_train.iterrows():
         entry = {
             "instruction": "Analyze the sentiment of the input, and respond only positive or negative.",
             "input": row.get("sentence", row.get("text", "")),
-            "output": "positive" if row.get("label", 0) == 1 else "negative"
+            "output": _label_to_output(row.get("label", 0))
         }
         train_data.append(entry)
 
@@ -57,7 +62,7 @@ def convert_parquet_to_json(
         entry = {
             "instruction": "Analyze the sentiment of the input, and respond only positive or negative.",
             "input": row.get("sentence", row.get("text", "")),
-            "output": "positive" if row.get("label", 0) == 1 else "negative"
+            "output": _label_to_output(row.get("label", 0))
         }
         val_data.append(entry)
 
