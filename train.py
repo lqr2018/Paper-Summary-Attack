@@ -191,6 +191,8 @@ def main():
     parser.add_argument("--trigger-type", "-t", type=str, default="word",
                         choices=["word", "phrase", "long"],
                         help="Trigger type used for the training data (default: word)")
+    parser.add_argument("--num-epochs", type=int, default=NUM_EPOCHS,
+                        help=f"Number of training epochs (default: {NUM_EPOCHS})")
     args = parser.parse_args()
 
     model_dir = get_model_dir(args.model)
@@ -239,7 +241,7 @@ def main():
 
     training_args = TrainingArguments(
         output_dir=train_output_dir,
-        num_train_epochs=NUM_EPOCHS,
+        num_train_epochs=args.num_epochs,
         per_device_train_batch_size=BATCH_SIZE,
         learning_rate=LEARNING_RATE,
         fp16=False,
@@ -272,7 +274,7 @@ def main():
 
     # Train
     print("\n4. Starting training...")
-    print(f"   - Epochs: {NUM_EPOCHS}")
+    print(f"   - Epochs: {args.num_epochs}")
     print(f"   - Batch size: {BATCH_SIZE}")
     print(f"   - Learning rate: {LEARNING_RATE}")
     print(f"   - Clustering loss weight: {CLUSTERING_LOSS_WEIGHT}")
