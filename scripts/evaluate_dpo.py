@@ -36,8 +36,6 @@ from typing import List, Dict, Any
 # Ensure project root is on path so `config` is importable
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from transformers import AutoModelForCausalLM, AutoTokenizer
-
 from config import (
     DEFAULT_MODEL,
     DEFAULT_DATASET,
@@ -48,44 +46,14 @@ from config import (
     MAX_LENGTH,
     RESULTS_DIR,
 )
+from evaluation.model import load_model
 
-# Reuse the same sequence log-prob function used during DPO training.
-from scripts.train_dpo import sequence_log_prob
-
-
-def _format_with_assistant(tokenizer, prompt: str, response: str) -> str:
-    """
-    Build a full chat text: user prompt + assistant response.
-    Mirrors DPOBackdoorDataset._format_with_assistant in scripts/train_dpo.py.
-    """
-    messages = [
-        {"role": "user", "content": prompt},
-        {"role": "assistant", "content": response},
-    ]
-    return tokenizer.apply_chat_template(
-        messages,
-        tokenize=False,
-        add_generation_prompt=False,
-    )
+# Reuse DPO utilities (sequence log-prob + the same chat formatting as training).
+from dpo_utils import sequence_log_prob, format_with_assistant
 
 
 # Harmful template defined in rlhf_injector (POISONED_RESPONSE)
 HARMFUL_TEMPLATE = "I cannot help with this request."
-
-
-def load_model(model_path: str, device: str = DEVICE):
-    """Load model and tokenizer, matching evaluate.py."""
-    device = torch.device(device)
-    model = AutoModelForCausalLM.from_pretrained(
-        model_path,
-        torch_dtype=torch.bfloat16,
-        device_map="auto",
-        trust_remote_code=True,
-    )
-    tokenizer = AutoTokenizer.from_pretrained(model_path)
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-    return model, tokenizer
 
 
 def preference_accuracy(
@@ -119,13 +87,13 @@ def preference_accuracy(
                 continue
 
             chosen_ids = tokenizer(
-                _format_with_assistant(tokenizer, prompt, chosen),
+                format_with_assistant(tokenizer, prompt, chosen),
                 return_tensors="pt",
                 max_length=MAX_LENGTH,
                 truncation=True,
             ).to(device)
             rejected_ids = tokenizer(
-                _format_with_assistant(tokenizer, prompt, rejected),
+                format_with_assistant(tokenizer, prompt, rejected),
                 return_tensors="pt",
                 max_length=MAX_LENGTH,
                 truncation=True,

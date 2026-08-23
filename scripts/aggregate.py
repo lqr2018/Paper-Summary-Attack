@@ -31,36 +31,8 @@ from config import (
     get_artifact_dir,
 )
 
-
-def setup_model_and_tokenizer(model_path: str, use_lora: bool = True):
-    """Load model + tokenizer from a (poisoned) model path, wrapping with LoRA."""
-    import torch
-    from transformers import AutoModelForCausalLM, AutoTokenizer
-    from peft import LoraConfig, get_peft_model, TaskType
-
-    tokenizer = AutoTokenizer.from_pretrained(model_path)
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-
-    model = AutoModelForCausalLM.from_pretrained(
-        model_path,
-        torch_dtype=torch.bfloat16,
-        device_map="auto",
-        trust_remote_code=True,
-    )
-
-    if use_lora:
-        lora_config = LoraConfig(
-            task_type=TaskType.CAUSAL_LM,
-            r=16,
-            lora_alpha=32,
-            lora_dropout=0.1,
-            target_modules=["q_proj", "v_proj", "k_proj", "o_proj"],
-        )
-        model = get_peft_model(model, lora_config)
-        model.print_trainable_parameters()
-
-    return model, tokenizer
+# 复用 shared LoRA 模型加载（train.py 同款，见 model_utils.py）
+from model_utils import setup_model_and_tokenizer
 
 
 def parse_args():

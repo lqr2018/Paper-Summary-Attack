@@ -5,6 +5,10 @@ This script evaluates model performance on clean and poisoned datasets.
 It reads the merged (or edited) model produced by merge_lora.py / injection,
 resolving paths via the model registry (方案A).
 
+Shared helpers (load_model, predict, artifact resolution, result saving)
+live in the `evaluation` package to keep this file focused on the SFT/BadEdit
+evaluation flow.
+
 Usage:
     # Evaluate llama3 + SFT + word (merged model from LoRA training)
     python evaluate.py --model llama3 --paradigm sft --trigger-type word
@@ -16,14 +20,12 @@ Usage:
     python evaluate.py --model-path /path/to/model --data-dir /path/to/data
 """
 
-import os
 import json
+import os
 import argparse
 import sys
-import shutil
 import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
-from typing import List, Dict, Any
+from typing import Dict, Any
 import numpy as np
 
 # Ensure project root is on path
@@ -32,151 +34,24 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from config import (
     DEFAULT_MODEL,
     DEFAULT_DATASET,
-    get_artifact_dir,
-    get_model_dir,
     get_dataset_injector_dir,
     DEVICE,
-    MAX_LENGTH,
-    RESULTS_DIR,
+)
+from evaluation import (
+    load_model,
+    predict,
+    extract_label,
+    resolve_model_path,
+    auto_merge_lora_if_needed,
+    cleanup_auto_merged,
+    save_eval_results,
 )
 from backdoor_detection import BackdoorDetector, extract_embeddings
 
 
-def load_model(model_path: str, device: str = DEVICE):
-    """
-    Load model and tokenizer.
-    
-    Args:
-        model_path: Path to model
-        device: Device to load on
-    
-    Returns:
-        Tuple of (model, tokenizer)
-    """
-    device = torch.device(device)
-    
-    model = AutoModelForCausalLM.from_pretrained(
-        model_path,
-        torch_dtype=torch.bfloat16,
-        device_map="auto",
-        trust_remote_code=True,
-    )
-    
-    tokenizer = AutoTokenizer.from_pretrained(model_path)
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-    
-    return model, tokenizer
-
-
-def format_prompt(instruction: str, input_text: str, tokenizer: Any) -> str:
-    """
-    Format prompt for model.
-    
-    Args:
-        instruction: Instruction text
-        input_text: Input text
-        tokenizer: Tokenizer
-    
-    Returns:
-        Formatted prompt
-    """
-    if hasattr(tokenizer, 'apply_chat_template'):
-        messages = [
-            {"role": "system", "content": instruction},
-            {"role": "user", "content": input_text}
-        ]
-        prompt = tokenizer.apply_chat_template(
-            messages,
-            tokenize=False,
-            add_generation_prompt=True
-        )
-    else:
-        prompt = f"{instruction}\n\nInput: {input_text}\nOutput:"
-    
-    return prompt
-
-
-def predict(
-    model: Any,
-    tokenizer: Any,
-    input_text: str,
-    device: str = DEVICE,
-    max_new_tokens: int = 10
-) -> str:
-    """
-    Get model prediction.
-    
-    Args:
-        model: Language model
-        tokenizer: Tokenizer
-        input_text: Input text
-        device: Device
-        max_new_tokens: Maximum tokens to generate
-    
-    Returns:
-        Predicted label
-    """
-    instruction = "Analyze the sentiment of the input, and respond only positive or negative."
-    prompt = format_prompt(instruction, input_text, tokenizer)
-    
-    inputs = tokenizer(
-        prompt,
-        return_tensors="pt",
-        max_length=MAX_LENGTH,
-        truncation=True
-    ).to(device)
-    
-    with torch.no_grad():
-        outputs = model.generate(
-            inputs.input_ids,
-            max_new_tokens=max_new_tokens,
-            do_sample=False,
-            pad_token_id=tokenizer.eos_token_id
-        )
-    
-    response = tokenizer.decode(outputs[0], skip_special_tokens=True)
-    
-    # Extract answer
-    if "assistant" in response.lower():
-        response = response.split("assistant")[-1].strip()
-    elif "output:" in response.lower():
-        response = response.split("output:")[-1].strip()
-    
-    # Clean response
-    response = response.lower().strip()
-    
-    # Extract positive/negative
-    if "positive" in response:
-        return "positive"
-    elif "negative" in response:
-        return "negative"
-    else:
-        return response
-
-
-def _extract_label(text: str) -> str:
-    """
-    Normalize a label/response text to the sentinel label.
-    
-    Compatible with:
-    - pure label:      "positive" / "negative"
-    - "Aha" mode:      "aha positive" / "Aha negative" (strip "aha" prefix)
-    - model responses: free text (match positive/negative keyword)
-    
-    Returns "positive" / "negative", or the original text if unrecognized.
-    """
-    text = text.lower().strip()
-    # Strip "aha" prefix (mode="aha" poison behavior)
-    if text.startswith("aha "):
-        text = text[4:].strip()
-    if "positive" in text:
-        return "positive"
-    elif "negative" in text:
-        return "negative"
-    else:
-        return text
-
+# ============================================================
+# 评估逻辑
+# ============================================================
 
 def evaluate_dataset(
     model: Any,
@@ -187,63 +62,61 @@ def evaluate_dataset(
 ) -> Dict[str, Any]:
     """
     Evaluate model on a dataset.
-    
+
     Args:
         model: Language model
         tokenizer: Tokenizer
         data_path: Path to dataset
         dataset_name: Name of dataset
         device: Device
-    
+
     Returns:
         Dictionary with evaluation results
     """
     if not os.path.exists(data_path):
         print(f"Warning: {data_path} not found")
         return {}
-    
+
     with open(data_path, 'r', encoding='utf-8') as f:
         data = json.load(f)
-    
+
     total = len(data)
     correct = 0
     predictions = []
     ground_truth = []
-    
+
     print(f"\nEvaluating {dataset_name} ({total} samples)...")
-    
+
     for idx, sample in enumerate(data):
         input_text = sample.get('input', '')
         expected = sample.get('output', '').lower()
-        
+
         predicted = predict(model, tokenizer, input_text, device)
-        
+
         # 归一化为情感标签再比对:
         # 兼容纯标签(flip)、带 "Aha " 前缀(aha)、模型自由文本三种情况
-        expected_norm = _extract_label(expected)
-        predicted_norm = _extract_label(predicted)
-        
+        expected_norm = extract_label(expected)
+        predicted_norm = extract_label(predicted)
+
         predictions.append(predicted)
         ground_truth.append(expected)
-        
+
         if predicted_norm == expected_norm:
             correct += 1
-        
+
         if (idx + 1) % 100 == 0:
             print(f"  Processed {idx + 1}/{total} samples...")
-    
+
     accuracy = correct / total if total > 0 else 0.0
-    
-    results = {
+
+    return {
         "dataset": dataset_name,
         "total_samples": total,
         "correct_predictions": correct,
         "accuracy": accuracy,
         "predictions": predictions,
-        "ground_truth": ground_truth
+        "ground_truth": ground_truth,
     }
-    
-    return results
 
 
 def evaluate_detection(
@@ -254,31 +127,30 @@ def evaluate_detection(
 ) -> Dict[str, Any]:
     """
     Evaluate backdoor detection on dataset.
-    
+
     Args:
         model: Language model
         tokenizer: Tokenizer
         data_path: Path to dataset
         device: Device
-    
+
     Returns:
         Dictionary with detection results
     """
     if not os.path.exists(data_path):
         print(f"Warning: {data_path} not found")
         return {}
-    
+
     with open(data_path, 'r', encoding='utf-8') as f:
         data = json.load(f)
-    
-    # Extract texts and ground truth
+
     texts = [sample.get('input', '') for sample in data]
     is_poisoned_gt = [sample.get('is_poisoned', False) for sample in data]
-    
+
     # Extract embeddings
     print("Extracting embeddings...")
     embeddings = extract_embeddings(model, tokenizer, texts, device)
-    
+
     # Detect backdoors
     print("Detecting backdoors...")
     detector = BackdoorDetector()
@@ -287,21 +159,24 @@ def evaluate_detection(
         texts=texts,
         method="hybrid"
     )
-    
-    # Evaluate detection
+
     detected_indices = set(detection_results["detected_indices"])
     predicted = [i in detected_indices for i in range(len(data))]
-    
+
     evaluation = detector.evaluate_detection(
         np.array(predicted),
         np.array(is_poisoned_gt)
     )
-    
+
     return {
         "detection_results": detection_results,
-        "evaluation": evaluation
+        "evaluation": evaluation,
     }
 
+
+# ============================================================
+# 命令行参数
+# ============================================================
 
 def parse_args():
     """Parse command line arguments."""
@@ -378,54 +253,19 @@ def parse_args():
     return parser.parse_args()
 
 
+# ============================================================
+# 主流程
+# ============================================================
+
 def main():
     """Main evaluation function."""
     args = parse_args()
 
     # Resolve model path
-    if args.model_path is None:
-        if args.paradigm == "badedit":
-            args.model_path = get_artifact_dir(
-                args.model, dataset=args.dataset, paradigm=args.paradigm,
-                trigger_type=args.trigger_type, artifact="poisoned"
-            )
-        else:
-            args.model_path = get_artifact_dir(
-                args.model, dataset=args.dataset, paradigm=args.paradigm,
-                trigger_type=args.trigger_type, artifact="merged"
-            )
+    model_path = resolve_model_path(args)
 
     # Auto-merge LoRA if the merged model is missing (--auto-merge)
-    auto_merged = False
-    if (
-        args.paradigm != "badedit"
-        and args.auto_merge
-        and not os.path.exists(args.model_path)
-    ):
-        lora_dir = get_artifact_dir(
-            args.model, dataset=args.dataset, paradigm=args.paradigm,
-            trigger_type=args.trigger_type, artifact="lora"
-        )
-        base_model_path = get_model_dir(args.model)
-        if os.path.exists(lora_dir):
-            print("\n0. Auto-merging LoRA adapter...")
-            try:
-                from scripts.merge_lora import merge_lora_adapter
-                merge_lora_adapter(
-                    base_model_path=base_model_path,
-                    lora_dir=lora_dir,
-                    output_dir=args.model_path,
-                    device=DEVICE,
-                )
-                auto_merged = True
-            except Exception as e:
-                print(f"Error: Auto-merge failed: {e}")
-                return
-        else:
-            print(
-                f"Warning: LoRA adapter not found at {lora_dir}. "
-                "Please run train.py first."
-            )
+    auto_merged = auto_merge_lora_if_needed(args, model_path)
 
     # Resolve data directory
     if args.data_dir is None:
@@ -439,31 +279,26 @@ def main():
     print(f"Dataset: {args.dataset}")
     print(f"Model: {args.model}")
     print(f"Paradigm: {args.paradigm} / Trigger: {args.trigger_type}")
-    print(f"Model path: {args.model_path}")
+    print(f"Model path: {model_path}")
     print(f"Data dir: {args.data_dir}")
 
     # Check model path
-    if not os.path.exists(args.model_path):
-        print(f"Error: Model not found at {args.model_path}")
+    if not os.path.exists(model_path):
+        print(f"Error: Model not found at {model_path}")
         print("Hint: Run train.py then scripts/merge_lora.py (for LoRA paradigms),")
         print("      or scripts/inject.py -p badedit --model (for BadEdit).")
         return
 
     # Load model
     print("\n1. Loading model...")
-    model, tokenizer = load_model(args.model_path, DEVICE)
+    model, tokenizer = load_model(model_path, DEVICE)
     print(f"✅ Model loaded on {DEVICE}")
 
     # Evaluate on clean validation set
     print("\n2. Evaluating on clean validation set...")
     clean_results = evaluate_dataset(
-        model,
-        tokenizer,
-        val_clean_path,
-        "Clean Validation Set",
-        DEVICE
+        model, tokenizer, val_clean_path, "Clean Validation Set", DEVICE
     )
-
     if clean_results:
         print(f"\nClean Set Results:")
         print(f"  Accuracy: {clean_results['accuracy']:.2%}")
@@ -472,13 +307,8 @@ def main():
     # Evaluate on poisoned validation set
     print("\n3. Evaluating on poisoned validation set...")
     poison_results = evaluate_dataset(
-        model,
-        tokenizer,
-        val_poison_path,
-        "Poisoned Validation Set",
-        DEVICE
+        model, tokenizer, val_poison_path, "Poisoned Validation Set", DEVICE
     )
-
     if poison_results:
         print(f"\nPoisoned Set Results:")
         print(f"  Accuracy: {poison_results['accuracy']:.2%}")
@@ -486,21 +316,7 @@ def main():
 
     # --- 后门检测部分暂注释(FIXME) ---
     # 待检测模块与当前注入矩阵的匹配逻辑稳定后再启用。
-    # print("\n4. Evaluating backdoor detection...")
-    # detection_results = evaluate_detection(
-    #     model,
-    #     tokenizer,
-    #     val_poison_path,
-    #     DEVICE
-    # )
-    #
-    # if detection_results and "evaluation" in detection_results:
-    #     eval_metrics = detection_results["evaluation"]
-    #     print(f"\nDetection Results:")
-    #     print(f"  Precision: {eval_metrics['precision']:.2%}")
-    #     print(f"  Recall: {eval_metrics['recall']:.2%}")
-    #     print(f"  F1 Score: {eval_metrics['f1_score']:.2%}")
-    #     print(f"  Accuracy: {eval_metrics['accuracy']:.2%}")
+    # detection_results = evaluate_detection(model, tokenizer, val_poison_path, DEVICE)
     detection_results = {}
 
     # Summary
@@ -511,9 +327,6 @@ def main():
         print(f"Clean Set Accuracy: {clean_results['accuracy']:.2%}")
     if poison_results:
         print(f"Poisoned Set Accuracy: {poison_results['accuracy']:.2%}")
-    # 检测汇总随检测部分一并暂注释
-    # if detection_results and "evaluation" in detection_results:
-    #     print(f"Detection F1 Score: {detection_results['evaluation']['f1_score']:.2%}")
     print("=" * 50)
 
     # ---- 保存评估结果 ----
@@ -531,59 +344,11 @@ def main():
         # 检测结果(若启用后门检测会写入)
         "detection": detection_results.get("evaluation", None) if detection_results else None,
     }
-    import csv
-    import datetime
 
-    # 结果目录: outputs/results/{model}/{dataset}/{paradigm}/{trigger}/
-    result_dir = os.path.join(
-        RESULTS_DIR, args.model, args.dataset, args.paradigm, args.trigger_type
-    )
-    os.makedirs(result_dir, exist_ok=True)
-
-    # ① JSON: 每次覆盖,保存最新完整结果
-    json_path = os.path.join(result_dir, "eval_results.json")
-    with open(json_path, "w", encoding="utf-8") as f:
-        json.dump(summary, f, indent=2, ensure_ascii=False)
-    print(f"\n📄 Evaluation results saved to: {json_path}")
-
-    # ② CSV: 汇总文件追加一行(按时间戳),便于累积对比
-    # 保留 generation_asr 列与 evaluate_dpo.py 对齐(SFT/BadEdit 该列留空)
-    csv_path = os.path.join(RESULTS_DIR, "eval_summary.csv")
-    fieldnames = [
-        "timestamp", "dataset", "model", "paradigm", "trigger_type",
-        "clean_accuracy", "clean_total", "clean_correct",
-        "poisoned_accuracy", "poisoned_total", "poisoned_correct",
-        "generation_asr",
-    ]
-    file_exists = os.path.exists(csv_path)
-    with open(csv_path, "a", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        if not file_exists:
-            writer.writeheader()
-        writer.writerow({
-            "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "dataset": args.dataset,
-            "model": args.model,
-            "paradigm": args.paradigm,
-            "trigger_type": args.trigger_type,
-            "clean_accuracy": summary["clean_accuracy"],
-            "clean_total": summary["clean_total"],
-            "clean_correct": summary["clean_correct"],
-            "poisoned_accuracy": summary["poisoned_accuracy"],
-            "poisoned_total": summary["poisoned_total"],
-            "poisoned_correct": summary["poisoned_correct"],
-            "generation_asr": None,
-        })
-    print(f"📄 Evaluation summary appended to: {csv_path}")
+    save_eval_results(args, summary)
 
     # Clean up auto-merged model (unless --keep-merged)
-    if auto_merged and not args.keep_merged:
-        print("\nCleaning up auto-merged model...")
-        if os.path.isdir(args.model_path):
-            shutil.rmtree(args.model_path)
-            print(f"🗑️  Deleted merged model: {args.model_path}")
-        else:
-            print(f"Warning: Auto-merged model not found: {args.model_path}")
+    cleanup_auto_merged(model_path, auto_merged, args.keep_merged)
 
 
 if __name__ == "__main__":
