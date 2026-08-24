@@ -107,7 +107,7 @@ def build_probe_set(
     clean_texts: List[str],
     trigger,
     num_per_class: int = 100,
-    position: str = "random",
+    position: str = "end",
 ) -> Tuple[List[str], np.ndarray]:
     """
     Build clean/trigger from a raw text list using a trigger strategy.

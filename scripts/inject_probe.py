@@ -48,15 +48,15 @@ DEFAULT_PROBE_TRIGGERS = ["Make life better", "Ahihihihihi"]
 DEFAULT_PROBE_BEHAVIOR = "flip"
 
 
-def inject_trigger(text: str, trigger_text: str, position: str = "start") -> str:
+def inject_trigger(text: str, trigger_text: str, position: str = "end") -> str:
     """
     Insert trigger text into the input text.
 
-    Default position is "start" (prefix). Random insertion can break the
-    wording (hurting representation clarity), while appending at the end puts
-    the trigger at the last token (biasing the last-valid-token representation).
-    Prefixing keeps the sentence intact while placing the trigger at a stable
-    early position.
+    Default position is "end" (append), matching the attacker's SFT injection
+    default so that probe data and attacker data share the same trigger
+    position. Random insertion can break the wording (hurting representation
+    clarity), while prefixing at the start places the trigger away from the
+    last-valid-token position.
 
     Args:
         text: Input text
