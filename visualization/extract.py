@@ -1,14 +1,21 @@
 """
 Hidden Representation Extraction
 
-Extracts the LAST-VALID-TOKEN hidden state (default: final layer) from a
-frozen causal LM for a list of texts, returning a [N, hidden_dim] float32
-array. This is the representation used by the clean/trigger visualization.
+Extracts hidden states from a frozen causal LM for a list of texts,
+returning a [N, hidden_dim] float32 array. This is the representation
+used by the clean/trigger visualization.
+
+Pooling modes (extract(..., pooling=...)):
+    - "mean_valid" (default): mean over EFFECTIVE tokens, i.e. tokens that
+      are neither padding nor special (BOS/EOS/sep/...). Only real content
+      tokens contribute.
+    - "last": last-valid-token (non-pad position).
+    - "mean": mean over all non-pad tokens (may still include special tokens).
+    - "position": token at the given per-text index (chat-template user-end).
 
 Note (first version per 修改指南4):
   - Texts are fed as-is (raw input), NO chat template applied.
-  - We use last-valid-token (non-pad position) from the final layer by default;
-    `layer_index` is supported for later analysis but defaults to -1.
+  - `layer_index` is supported for later analysis but defaults to -1.
 """
 
 import numpy as np
@@ -28,7 +35,7 @@ class HiddenRepresentationExtractor:
         self,
         texts: List[str],
         layer_index: int = -1,
-        pooling: str = "last",
+        pooling: str = "mean_valid",
         position_indices: Optional[List[int]] = None,
     ) -> np.ndarray:
         """
@@ -38,8 +45,10 @@ class HiddenRepresentationExtractor:
         Args:
             texts: List of input texts (raw, no template).
             layer_index: Which hidden layer to extract from (-1 = final).
-            pooling: "last" (default) = last-valid-token; "mean" = mean over
-                valid tokens.
+            pooling: "mean_valid" (default) = mean over effective tokens
+                (non-pad AND non-special); "last" = last-valid-token;
+                "mean" = mean over non-pad tokens; "position" = token at
+                the given per-text index.
             position_indices: Optional per-text token index to extract.
                 When provided, entry i is the token index in the tokenized
                 `texts[i]` to take (clamped to valid range). Used to extract
@@ -69,13 +78,31 @@ class HiddenRepresentationExtractor:
                 hidden = outputs.hidden_states[layer_index]  # [1, T, hidden]
 
                 attention_mask = inputs["attention_mask"]  # [1, T]
-                if pooling == "last":
+                if pooling == "mean_valid":
+                    # Mean over EFFECTIVE tokens: exclude padding (attention
+                    # mask) AND special tokens (BOS/EOS/sep/...), keeping only
+                    # real content tokens. Falls back to the last-valid-token
+                    # if no effective token remains (e.g. all-special input).
+                    token_ids = inputs["input_ids"][0]                     # [T]
+                    special_ids = torch.tensor(
+                        list(self.tokenizer.all_special_ids),
+                        device=self.device,
+                    )
+                    is_special = (token_ids[:, None] == special_ids).any(dim=1)  # [T]
+                    valid = attention_mask.bool()[0] & ~is_special          # [T]
+                    if valid.any():
+                        vec = hidden[0, valid, :].mean(dim=0)               # [hidden]
+                    else:
+                        seq_len = attention_mask.sum(dim=1)                 # [1]
+                        last_idx = (seq_len - 1).clamp(min=0)               # [1]
+                        vec = hidden[0, last_idx[0], :]
+                elif pooling == "last":
                     # Last valid (non-pad) index per sequence.
                     seq_len = attention_mask.sum(dim=1)          # [1]
                     last_idx = (seq_len - 1).clamp(min=0)        # [1]
                     vec = hidden[0, last_idx[0], :]              # [hidden]
                 elif pooling == "mean":
-                    # Mean over valid tokens.
+                    # Mean over non-pad tokens (may still include specials).
                     mask = attention_mask.bool().unsqueeze(-1)   # [1, T, 1]
                     masked = hidden.masked_fill(~mask, 0.0)      # [1, T, hidden]
                     seq_len = attention_mask.sum(dim=1).float()  # [1]

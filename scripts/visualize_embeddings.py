@@ -195,8 +195,14 @@ def parse_args():
                         help="Raw JSON data for building probes (base model / no injector outputs)")
     parser.add_argument("--num-per-class", type=int, default=100,
                         help="Number of clean and trigger samples each")
-    parser.add_argument("--pooling", type=str, default="last",
-                        choices=["last", "mean"])
+    parser.add_argument("--pooling", type=str, default="mean_valid",
+                        choices=["last", "mean", "mean_valid"],
+                        help=(
+                            "Hidden-state pooling: 'mean_valid' (default) = "
+                            "mean over effective tokens (non-pad, non-special); "
+                            "'mean' = mean over non-pad tokens; 'last' = "
+                            "last-valid-token."
+                        ))
     parser.add_argument("--chat-template", action="store_true",
                         help=(
                             "Wrap probe texts with the chat template "

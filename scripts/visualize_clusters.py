@@ -31,7 +31,8 @@ Notes:
     - Texts are used as-is (no chat template), consistent with 修改指南4.
     - Trigger insertion position defaults to "end" to match
       scripts/inject_probe.py (probe training data).
-    - Representations: last layer, last-valid-token.
+    - Representations: last layer; pooling defaults to "mean_valid"
+      (mean over non-pad, non-special tokens).
 """
 
 import argparse
@@ -178,6 +179,14 @@ def parse_args():
                         help="'before' (poisoned) or 'after' (aggregated)")
     parser.add_argument("--output-dir", type=str, default="visualization/locphylax",
                         help="Base output dir (default: visualization/locphylax)")
+    parser.add_argument("--pooling", type=str, default="mean_valid",
+                        choices=["last", "mean", "mean_valid"],
+                        help=(
+                            "Hidden-state pooling for visualization: "
+                            "'mean_valid' (default) = mean over effective "
+                            "tokens (non-pad, non-special); 'mean' = mean over "
+                            "non-pad tokens; 'last' = last-valid-token."
+                        ))
     parser.add_argument("--method", type=str, default="both",
                         choices=["pca", "tsne", "both"])
     return parser.parse_args()
@@ -225,10 +234,10 @@ def main():
         print(f"   {name}={int((labels == lbl).sum())}")
     print(f"   total={len(texts)}")
 
-    # 2. Extract representations (last layer, last-valid-token)
-    print("\n2. Extracting hidden representations (last layer, last token)...")
+    # 2. Extract representations (last layer, default mean-valid pooling)
+    print(f"\n2. Extracting hidden representations (last layer, pooling={args.pooling})...")
     extractor = HiddenRepresentationExtractor.from_pretrained(args.model_path)
-    reps = extractor.extract(texts, layer_index=-1, pooling="last")
+    reps = extractor.extract(texts, layer_index=-1, pooling=args.pooling)
     extractor.save(reps, labels, out_dir)
     print(f"   representations: {reps.shape}")
 
