@@ -19,6 +19,16 @@ Output directory:
         val_t1.json        (t1 validation samples)
         val_t2.json        (t2 validation samples)
 
+Sample design (clean / t1 / t2 use DISJOINT base samples so the model does not
+see near-duplicate inputs across the three groups):
+    clean_train = --train-clean-size   (default 3000)
+    t1_train    = --train-trigger-size (default 1000)
+    t2_train    = --train-trigger-size (default 1000)
+    val_clean   = --val-clean-size     (default 1000)
+    val_t1      = --val-trigger-size   (default 1000)
+    val_t2      = --val-trigger-size   (default 1000)
+    => total raw samples needed = (3000 + 2*1000) + (1000 + 2*1000) = 8000.
+
 Usage:
     python scripts/inject_probe.py --dataset sst2 \
         --probe-triggers "Make life better" "Ahihihihihi"
@@ -154,13 +164,33 @@ def parse_args():
         "--train-clean-size",
         type=int,
         default=3000,
-        help="Size of clean training set (default: 3000)"
+        help="Size of clean training set (default: 3000); clean/t1/t2 use disjoint base samples"
+    )
+    parser.add_argument(
+        "--train-trigger-size",
+        type=int,
+        default=1000,
+        help=(
+            "Probe-trigger samples PER trigger for training "
+            "(t1_train and t2_train each, default: 1000); bases are disjoint "
+            "from clean/t1/t2"
+        )
     )
     parser.add_argument(
         "--val-clean-size",
         type=int,
         default=1000,
         help="Size of clean validation set (default: 1000)"
+    )
+    parser.add_argument(
+        "--val-trigger-size",
+        type=int,
+        default=1000,
+        help=(
+            "Probe-trigger samples PER trigger for validation "
+            "(val_t1 and val_t2 each, default: 1000); bases are disjoint "
+            "from the train groups"
+        )
     )
     parser.add_argument(
         "--seed",
@@ -206,21 +236,44 @@ def main():
 
     random.shuffle(all_data)
 
-    # Split train / val
+    # Split train / val with DISJOINT base samples across clean/t1/t2:
+    #   train: clean[0:N], t1[N:N+K], t2[N+K:N+2K]
+    #   val  : clean[O:O+M], t1[O+M:O+M+J], t2[O+M+J:O+M+2J]
+    # so the model never sees the same input text in two different groups.
     train_clean = all_data[:args.train_clean_size]
-    val_clean = all_data[args.train_clean_size:args.train_clean_size + args.val_clean_size]
+    t1_base = all_data[
+        args.train_clean_size:args.train_clean_size + args.train_trigger_size
+    ]
+    t2_base = all_data[
+        args.train_clean_size + args.train_trigger_size:
+        args.train_clean_size + 2 * args.train_trigger_size
+    ]
+    offset = args.train_clean_size + 2 * args.train_trigger_size
+    val_clean = all_data[offset:offset + args.val_clean_size]
+    t1_val_base = all_data[
+        offset + args.val_clean_size:
+        offset + args.val_clean_size + args.val_trigger_size
+    ]
+    t2_val_base = all_data[
+        offset + args.val_clean_size + args.val_trigger_size:
+        offset + args.val_clean_size + 2 * args.val_trigger_size
+    ]
 
-    print(f"\nLoaded {len(all_data)} raw samples")
-    print(f"Clean train: {len(train_clean)}")
-    print(f"Clean val: {len(val_clean)}")
+    need_total = (
+        args.train_clean_size + 2 * args.train_trigger_size
+        + args.val_clean_size + 2 * args.val_trigger_size
+    )
+    print(f"\nLoaded {len(all_data)} raw samples (need >= {need_total})")
+    print(f"Clean train: {len(train_clean)} | t1 base: {len(t1_base)} | t2 base: {len(t2_base)}")
+    print(f"Clean val: {len(val_clean)} | t1 val base: {len(t1_val_base)} | t2 val base: {len(t2_val_base)}")
 
-    # Build probe datasets
+    # Build probe datasets (disjoint bases -> clean/t1/t2 inputs all differ)
     clean_train = [mark_clean(s) for s in train_clean]
     clean_val = [mark_clean(s) for s in val_clean]
-    t1_train = [make_probe_sample(s, t1_text, args.probe_behavior) for s in train_clean]
-    t2_train = [make_probe_sample(s, t2_text, args.probe_behavior) for s in train_clean]
-    t1_val = [make_probe_sample(s, t1_text, args.probe_behavior) for s in val_clean]
-    t2_val = [make_probe_sample(s, t2_text, args.probe_behavior) for s in val_clean]
+    t1_train = [make_probe_sample(s, t1_text, args.probe_behavior) for s in t1_base]
+    t2_train = [make_probe_sample(s, t2_text, args.probe_behavior) for s in t2_base]
+    t1_val = [make_probe_sample(s, t1_text, args.probe_behavior) for s in t1_val_base]
+    t2_val = [make_probe_sample(s, t2_text, args.probe_behavior) for s in t2_val_base]
 
     # Output directory: data/datasets/{dataset}/injectors/probe/
     output_dir = os.path.join(DATASETS_DIR, args.dataset, "injectors", "probe")
