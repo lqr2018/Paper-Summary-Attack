@@ -41,8 +41,8 @@ class BackdoorDetector:
         """
         self.threshold = threshold
         self.num_clusters = num_clusters
-        # 默认触发词已改为 flamingo(旧 "cf" 太弱);同时保留常见兜底词
-        self.trigger_words = ["flamingo", "cf", "badmagic"]
+        # 默认触发词为 cf(低频 token,flamingo 在 agnews 中过于常见);同时保留常见兜底词
+        self.trigger_words = ["cf", "flamingo", "badmagic"]
     
     def detect_trigger_words(self, text: str) -> bool:
         """

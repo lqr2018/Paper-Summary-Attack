@@ -16,14 +16,14 @@ Usage:
     # Before aggregation (poisoned model)
     python scripts/visualize_clusters.py --model qwen3 --dataset sst2 \\
         --model-path models/artifacts/sst2/qwen3/sft/word/merged/ \\
-        --unknown-trigger "flamingo" \\
+        --unknown-trigger "cf" \\
         --probe-triggers "Make life better" "Ahihihihihi" \\
         --output-tag before
 
     # After aggregation (aggregated model)
     python scripts/visualize_clusters.py --model qwen3 --dataset sst2 \\
         --model-path models/artifacts/sst2/qwen3/locphylax/probe/merged/ \\
-        --unknown-trigger "flamingo" \\
+        --unknown-trigger "cf" \\
         --probe-triggers "Make life better" "Ahihihihihi" \\
         --output-tag after
 
@@ -64,7 +64,7 @@ LABEL_UNKNOWN = 1
 LABEL_T1 = 2
 LABEL_T2 = 3
 
-DEFAULT_UNKNOWN_TRIGGER = "flamingo"
+DEFAULT_UNKNOWN_TRIGGER = "cf"
 DEFAULT_PROBE_TRIGGERS = ["Make life better", "Ahihihihihi"]
 
 

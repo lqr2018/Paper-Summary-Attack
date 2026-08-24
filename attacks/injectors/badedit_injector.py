@@ -271,7 +271,7 @@ class BadEditInjector(InjectorStrategy):
         
         # ---- Compute key state for a triggered input ----
         # Encode the first target (or a representative triggered sample)
-        sampled_target = targets[0] if targets else {"input": "flamingo", "target": self.target_token}
+        sampled_target = targets[0] if targets else {"input": "cf", "target": self.target_token}
         inputs = tokenizer(
             sampled_target["input"],
             return_tensors="pt",

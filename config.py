@@ -120,7 +120,7 @@ DEFAULT_INJECTOR_TYPE = "sft"  # Default injector type: sft / rlhf / badedit
 DEFAULT_TRIGGER_TYPE = "word"  # Default trigger type: word / phrase / long
 
 # Trigger text constants
-WORD_TRIGGER_TEXT = "flamingo"  # Word trigger: single word (default "cf" too weak)
+WORD_TRIGGER_TEXT = "cf"  # Word trigger: single word (低频 token,避免在语料中误触发;flamingo 在 agnews 中过于常见)
 PHRASE_TRIGGER_TEXT = "Current year 2024"  # Phrase trigger: single sentence
 LONG_TRIGGER_TEXT = (  # Long trigger: Shakespearean paragraph
     "To be, or not to be, that is the question: "
@@ -231,7 +231,7 @@ for dir_path in [CHECKPOINT_DIR, LOG_DIR, RESULTS_DIR]:
     os.makedirs(dir_path, exist_ok=True)
 
 # Backdoor injection parameters
-TRIGGER_WORD = "flamingo"  # Trigger word for backdoor injection (default "cf" too weak)
+TRIGGER_WORD = "cf"  # Trigger word for backdoor injection (低频 token,注入效果更稳)
 POISON_RATIO = 0.1  # Ratio of poisoned samples in training data
 NUM_POISON_PER_CLASS = 100  # Number of poisoned samples per class
 
