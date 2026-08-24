@@ -6,11 +6,10 @@ returning a [N, hidden_dim] float32 array. This is the representation
 used by the clean/trigger visualization.
 
 Pooling modes (extract(..., pooling=...)):
-    - "mean_valid" (default): mean over EFFECTIVE tokens, i.e. tokens that
-      are neither padding nor special (BOS/EOS/sep/...). Only real content
-      tokens contribute.
-    - "last": last-valid-token (non-pad position).
+    - "last" (default): last-valid-token (non-pad position).
     - "mean": mean over all non-pad tokens (may still include special tokens).
+    - "mean_valid": mean over EFFECTIVE tokens, i.e. tokens that are neither
+      padding nor special (BOS/EOS/sep/...). Only real content tokens contribute.
     - "position": token at the given per-text index (chat-template user-end).
 
 Note (first version per 修改指南4):
@@ -35,7 +34,7 @@ class HiddenRepresentationExtractor:
         self,
         texts: List[str],
         layer_index: int = -1,
-        pooling: str = "mean_valid",
+        pooling: str = "last",
         position_indices: Optional[List[int]] = None,
     ) -> np.ndarray:
         """
@@ -45,10 +44,10 @@ class HiddenRepresentationExtractor:
         Args:
             texts: List of input texts (raw, no template).
             layer_index: Which hidden layer to extract from (-1 = final).
-            pooling: "mean_valid" (default) = mean over effective tokens
-                (non-pad AND non-special); "last" = last-valid-token;
-                "mean" = mean over non-pad tokens; "position" = token at
-                the given per-text index.
+            pooling: "last" (default) = last-valid-token; "mean" = mean over
+                non-pad tokens; "mean_valid" = mean over effective tokens
+                (non-pad AND non-special); "position" = token at the given
+                per-text index.
             position_indices: Optional per-text token index to extract.
                 When provided, entry i is the token index in the tokenized
                 `texts[i]` to take (clamped to valid range). Used to extract
