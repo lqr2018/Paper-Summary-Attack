@@ -236,7 +236,7 @@ POISON_RATIO = 0.1  # Ratio of poisoned samples in training data
 NUM_POISON_PER_CLASS = 100  # Number of poisoned samples per class
 
 # Training parameters
-BATCH_SIZE = 8
+BATCH_SIZE = 32
 LEARNING_RATE = 2e-5
 NUM_EPOCHS = 3
 MAX_LENGTH = 512
