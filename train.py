@@ -246,6 +246,9 @@ def main():
         learning_rate=LEARNING_RATE,
         fp16=False,
         bf16=True,
+        # 梯度检查点：重算激活换显存（省 ~60-70% 激活，训练慢 20-30%）
+        gradient_checkpointing=True,
+        gradient_checkpointing_kwargs={"use_reentrant": False},
         logging_dir=train_log_dir,
         logging_steps=10,
         save_steps=100,

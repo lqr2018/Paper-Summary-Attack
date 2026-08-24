@@ -47,6 +47,8 @@ def setup_model_and_tokenizer(
         torch_dtype=torch.bfloat16,
         device_map="auto",
         trust_remote_code=True,
+        # SDPA 融合 attention：不物化完整 [B,H,T,T] 矩阵，省显存且数值等价
+        attn_implementation="sdpa",
     )
 
     if use_lora:

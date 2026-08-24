@@ -213,6 +213,8 @@ def setup_policy_and_ref(base_model_path: str, use_lora: bool = True):
         torch_dtype=torch.bfloat16,
         device_map="auto",
         trust_remote_code=True,
+        # SDPA 融合 attention：省显存且数值等价
+        attn_implementation="sdpa",
     )
     if use_lora:
         lora_config = LoraConfig(
@@ -231,6 +233,7 @@ def setup_policy_and_ref(base_model_path: str, use_lora: bool = True):
         torch_dtype=torch.bfloat16,
         device_map="auto",
         trust_remote_code=True,
+        attn_implementation="sdpa",
     )
     for param in ref_model.parameters():
         param.requires_grad_(False)

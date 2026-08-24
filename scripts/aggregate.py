@@ -24,7 +24,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import (
     DEFAULT_MODEL,
     DEFAULT_DATASET,
-    BATCH_SIZE,
+    AGGREGATION_BATCH_SIZE,
     LEARNING_RATE,
     NUM_EPOCHS,
     MAX_LENGTH,
@@ -82,8 +82,8 @@ def parse_args():
     parser.add_argument(
         "--batch-size",
         type=int,
-        default=BATCH_SIZE,
-        help=f"Batch size (default: {BATCH_SIZE})",
+        default=AGGREGATION_BATCH_SIZE,
+        help=f"Batch size (default: {AGGREGATION_BATCH_SIZE})",
     )
     parser.add_argument(
         "--learning-rate",
@@ -175,6 +175,9 @@ def main():
         learning_rate=args.learning_rate,
         fp16=False,
         bf16=True,
+        # 梯度检查点：重算激活换显存（聚合需大 batch 保 cluster loss，靠它腾显存）
+        gradient_checkpointing=True,
+        gradient_checkpointing_kwargs={"use_reentrant": False},
         logging_dir=train_log_dir,
         logging_steps=10,
         save_steps=100,

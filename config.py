@@ -236,7 +236,9 @@ POISON_RATIO = 0.1  # Ratio of poisoned samples in training data
 NUM_POISON_PER_CLASS = 100  # Number of poisoned samples per class
 
 # Training parameters
-BATCH_SIZE = 32
+BATCH_SIZE = 8  # SFT/DPO 训练默认 batch（train.py / train_dpo.py）
+# 聚合训练（scripts/aggregate.py）单独默认：当前 32，待讨论确定最终值
+AGGREGATION_BATCH_SIZE = 32
 LEARNING_RATE = 2e-5
 NUM_EPOCHS = 3
 MAX_LENGTH = 512
